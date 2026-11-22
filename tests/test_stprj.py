@@ -1,4 +1,4 @@
-"""Run from stprj-tool/: python3 -m unittest discover tests
+"""Run from synpat/: python3 -m unittest discover tests
 
 Uses the real backups in ../PROJECTS; tests are skipped when they are absent.
 """

@@ -1,4 +1,4 @@
-// Run: node --test stprj-tool/web/tests/rpc.test.mjs
+// Run: node --test synpat/web/tests/rpc.test.mjs
 // Fixtures in fixtures/syntakt-replies.json are REAL replies captured from a Syntakt (fw strings 0097/1.42)
 // with /tmp/xfer-re/probe.py (read-only requests only). Request frames are byte-compared to probe.py output.
 import test from 'node:test';

@@ -1,6 +1,6 @@
 """Local web GUI server for moving patterns between .stprj backups.
 
-Run from stprj-tool/:  python3 -m web.server [--projects DIR]... [--output DIR] [--port N]
+Run from synpat/:  python3 -m web.server [--projects DIR]... [--output DIR] [--port N]
 Binds to 127.0.0.1 only. Source files are never modified.
 """
 
@@ -222,7 +222,7 @@ def parse_index(value) -> int:
 
 class Handler(BaseHTTPRequestHandler):
     store: Store
-    server_version = "stprj-web"
+    server_version = "synpat"
 
     def log_message(self, fmt, *args):
         sys.stderr.write("%s %s\n" % (self.address_string(), fmt % args))

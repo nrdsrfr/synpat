@@ -1,11 +1,11 @@
 # Local web GUI for moving patterns between Syntakt .stprj backups.
 #
-#   docker build -t stprj-tool .
+#   docker build -t synpat .
 #   docker run --rm -p 127.0.0.1:8765:8765 \
 #     -v "/path/to/Elektron Syntakt/PROJECTS:/data/projects:ro" \
 #     -v "/path/to/Elektron Syntakt/OLD BACKUP:/data/old-backup:ro" \
 #     -v "/path/to/Elektron Syntakt/OUTPUT:/data/output" \
-#     stprj-tool
+#     synpat
 #   then open http://localhost:8765/ in Chrome.
 #
 # WebMIDI / SysEx device access happens in the HOST browser (Chrome on the Mac), not in the container,
