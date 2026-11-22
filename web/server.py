@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+import hashlib
 import json
 import re
 import mimetypes
@@ -26,8 +27,9 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from stprj import (CopyError, FormatError, Payload, Project, StprjFile, copy_pattern_with_kit,  # noqa: E402
+from stprj import (FormatError, Payload, Project, StprjFile,  # noqa: E402
                    parse_slot, read_stprj, slot_label, write_raw_stprj, write_stprj)
+from web.plan import PlanError, parse_ops, simulate  # noqa: E402
 from stprj.container import MANIFEST_NAME, decode_payload, encode_payload  # noqa: E402
 from stprj.layout import PATTERN_COUNT, STEP_COUNT, TRACK_BASE, TRACK_COUNT, TRACK_SIZE  # noqa: E402
 
@@ -37,6 +39,8 @@ MAX_BACKUP_BODY = 12 << 20  # base64 of up to 8 MB payload
 MAX_BACKUP_PAYLOAD = 8 << 20
 DEFAULT_FIRMWARE = "1.42"
 LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+MAX_PLAN_JSON = 512 << 10  # persisted queue (opaque client JSON)
+MAX_SIMS = 4  # validated simulations kept for planned-slot previews
 MAX_CACHED = 8  # decoded projects (~4 MB each) kept in memory
 
 
@@ -60,13 +64,20 @@ class Store:
         self._cache: dict[tuple[Path, int], tuple[Project | None, str | None]] = {}
         self._load_lock = threading.Lock()
         self.meta: dict[tuple[Path, int], tuple[tuple[str, int] | None, str | None]] = {}
-        self.session: dict | None = None
+        self.session: dict | None = None  # working copy: result of the last plan run (undo/save/payload)
+        self.plan: dict | None = None  # queue as the client last stored it (opaque JSON; survives page reloads)
+        self.plan_rev = 0  # bumped on every stored plan; stale writes (other tab) are rejected
+        self.sims: dict[str, Project] = {}  # validated simulations by key (dest file + ops), for planned-slot previews
+        self.rev_counter = 0  # session revisions
 
     # ---- file ids: "<dir index>/<file name>" ----
     def resolve(self, file_id: str) -> Path:
         try:
             idx, _, name = file_id.partition("/")
-            base = self.dirs[int(idx)]
+            i = int(idx)
+            if not idx.isdigit() or not 0 <= i < len(self.dirs):
+                raise IndexError(idx)
+            base = self.dirs[i]
         except (ValueError, IndexError):
             raise ApiError(400, f"bad file id {file_id!r}")
         path = (base / name).resolve()
@@ -185,6 +196,45 @@ def device_backup(store: "Store", body: dict) -> dict:
             "size": target.stat().st_size}
 
 
+def plan_request(store: "Store", body: dict):
+    """Parse {destFileId, ops}; returns (dest Project, ops)."""
+    dest = store.project(str(body.get("destFileId") or ""))
+    try:
+        return dest, parse_ops(body.get("ops", []))
+    except PlanError as e:
+        raise ApiError(400, str(e))
+
+
+def plan_simulate(store: "Store", dest: Project, ops):
+    def load(file_id: str) -> Project:
+        try:
+            return store.project(file_id)
+        except ApiError as e:
+            raise PlanError(str(e))
+    return simulate(dest, ops, load)
+
+
+def sim_key(store: "Store", file_id: str, ops) -> str:
+    """Identifies one simulation: destination file (+ mtime) and the exact op list."""
+    dest_path = store.resolve(file_id)
+    blob = json.dumps([file_id, dest_path.stat().st_mtime_ns, [list(vars(o).values()) for o in ops]])
+    return hashlib.sha256(blob.encode()).hexdigest()[:20]
+
+
+def make_revision(store: "Store", project: Project):
+    """Encode the working copy once; its revision ties a device write to exactly these bytes."""
+    encoded = encode_payload(project.file.payload)
+    with store._cache_lock:
+        store.rev_counter += 1
+        n = store.rev_counter
+    sha = hashlib.sha256(encoded).hexdigest()
+    return encoded, {"n": n, "sha": sha, "id": f"{n}-{sha[:12]}"}
+
+
+def results_json(results) -> list[dict]:
+    return [{"ok": r.ok, "warnings": r.warnings, "error": r.error, "forceable": r.forceable} for r in results]
+
+
 def slots_json(proj: Project, original: Project | None = None) -> list[dict]:
     out = []
     for i in range(PATTERN_COUNT):
@@ -291,8 +341,13 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/api/session/payload":
             def cur():
                 sess = self.session()
-                payload = sess["current"].file.payload
-                return encode_payload(payload), self.payload_headers(payload, "working copy")
+                project, encoded, rev = sess["snap"]  # one immutable tuple: project, bytes and revision always agree
+                want = q.get("rev")
+                if want is not None and want != rev["id"]:
+                    raise ApiError(409, f"working copy changed (revision {rev['id']}, requested {want}); rebuild before writing")
+                headers = self.payload_headers(project.file.payload, "working copy")
+                headers["X-Project-Revision"] = rev["id"]
+                return encoded, headers
             return self._binary(cur)
         if url.path.startswith("/api/"):
             return self._guard(lambda: self.api_get(url.path, q))
@@ -312,16 +367,26 @@ class Handler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         if not self._host_ok():
             return self._json(403, {"error": "unexpected Host header; use http://localhost:PORT"})
-        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return self._json(400, {"error": "invalid Content-Length"})
+        if length < 0:
+            return self._json(400, {"error": "invalid Content-Length"})
         limit = MAX_BACKUP_BODY if url.path == "/api/device/backup" else MAX_BODY
         if length > limit:
             return self._json(413, {"error": "body too large"})
         if self.headers.get("Origin") and urlparse(self.headers["Origin"]).netloc != self.headers.get("Host"):
             return self._json(403, {"error": "cross-origin request refused"})
+        raw = self.rfile.read(length) if length else b""
+        if len(raw) != length:
+            return self._json(400, {"error": "request body shorter than Content-Length"})
         try:
-            body = json.loads(self.rfile.read(length) or b"{}")
-        except json.JSONDecodeError:
+            body = json.loads(raw or b"{}")
+        except (json.JSONDecodeError, UnicodeDecodeError):
             return self._json(400, {"error": "invalid JSON"})
+        if not isinstance(body, dict):
+            return self._json(400, {"error": "JSON body must be an object"})
         self._guard(lambda: self.api_post(url.path, body))
 
     # ---- routes ----
@@ -333,6 +398,14 @@ class Handler(BaseHTTPRequestHandler):
             return project_json(s.project(q.get("file", "")))
         if path == "/api/preview":
             return preview_json(s.project(q.get("file", "")), parse_index(q.get("slot", "")))
+        if path == "/api/plan":
+            return {"plan": s.plan, "rev": s.plan_rev}
+        if path == "/api/plan/preview":
+            with s._cache_lock:
+                sim = s.sims.get(q.get("key", ""))
+            if sim is None:
+                raise ApiError(409, "that plan is no longer validated; the queue changed")
+            return preview_json(sim, parse_index(q.get("slot", "")))
         if path == "/api/session":
             return self.session_state()
         if path == "/api/session/preview":
@@ -349,44 +422,57 @@ class Handler(BaseHTTPRequestHandler):
         if sess is None:
             return {"open": False, **extra}
         return {"open": True, "file": sess["file"], "dest": project_json(sess["current"], sess["original"]),
-                "undoDepth": len(sess["stack"]), "applied": sess["applied"], **extra}
+                "undoDepth": len(sess["stack"]), "applied": sess["applied"], "revision": sess["snap"][2], **extra}
 
     def api_post(self, path: str, b: dict):
         s = self.store
         if path == "/api/device/backup":
             return device_backup(s, b)
+        if path == "/api/plan/validate":
+            dest, ops = plan_request(s, b)
+            key = sim_key(s, b["destFileId"], ops)
+            result, results = plan_simulate(s, dest, ops)
+            with s._cache_lock:
+                s.sims.pop(key, None)
+                s.sims[key] = result
+                while len(s.sims) > MAX_SIMS:
+                    del s.sims[next(iter(s.sims))]
+            return {"ok": all(r.ok for r in results), "results": results_json(results), "key": key,
+                    "project": project_json(result, dest)}
+        if path == "/api/plan/store":
+            plan = b.get("plan")
+            if plan is not None and (not isinstance(plan, dict) or len(json.dumps(plan)) > MAX_PLAN_JSON):
+                raise ApiError(400, "plan must be a JSON object under 512 KB")
+            with s._lock:
+                if b.get("rev") != s.plan_rev:
+                    raise ApiError(409, "the queue was changed elsewhere (another tab?); reload to see it", rev=s.plan_rev)
+                s.plan = plan
+                s.plan_rev += 1
+                return {"stored": plan is not None, "rev": s.plan_rev}
+        if path == "/api/plan/run":
+            dest, ops = plan_request(s, b)
+            if not ops:
+                raise ApiError(409, "the queue is empty")
+            result, results = plan_simulate(s, dest, ops)
+            if not all(r.ok for r in results):
+                raise ApiError(409, "the queue has errors; fix or force the failing operations", results=results_json(results))
+            encoded, rev = make_revision(s, result)
+            with s._lock:
+                s.session = {"file": b["destFileId"], "path": s.resolve(b["destFileId"]), "original": dest,
+                             "current": result, "stack": [(dest, [])], "snap": (result, encoded, rev),
+                             "applied": [f"{len(ops)} operation(s) from queue"]}
+                return self.session_state(results=results_json(results),
+                                          warnings=[w for r in results for w in r.warnings])
         with s._lock:
-            if path == "/api/session/open":
-                proj = s.project(b.get("file", ""))
-                s.session = {"file": b["file"], "path": s.resolve(b["file"]), "original": proj,
-                             "current": proj, "stack": [], "applied": []}
-                return self.session_state()
             if path == "/api/session/discard":
                 s.session = None
                 return self.session_state()
             sess = self.session()
-            if path == "/api/session/apply":
-                src = s.project(b.get("srcFile", ""))
-                si, di = parse_index(b.get("srcSlot")), parse_index(b.get("dstSlot"))
-                kit = b.get("kit")
-                ki = None if kit in (None, "") else int(kit) - 1
-                if ki is not None and not 0 <= ki < 128:
-                    raise ApiError(400, "kit must be 1..128")
-                try:
-                    new, warnings = copy_pattern_with_kit(src, si, sess["current"], di, ki, bool(b.get("force")))
-                except CopyError as e:
-                    raise ApiError(409, str(e), refusal=True)
-                except (FormatError, IndexError, ValueError) as e:
-                    raise ApiError(422, str(e))
-                sess["stack"].append((sess["current"], sess["applied"]))
-                sess["current"] = new
-                sess["applied"] = sess["applied"] + [
-                    f"{b['srcFile'].split('/', 1)[1]} {slot_label(si)} -> {slot_label(di)}"]
-                return self.session_state(warnings=warnings)
             if path == "/api/session/undo":
                 if not sess["stack"]:
                     raise ApiError(409, "nothing to undo")
                 sess["current"], sess["applied"] = sess["stack"].pop()
+                sess["snap"] = (sess["current"], *make_revision(s, sess["current"]))
                 return self.session_state()
             if path == "/api/session/save":
                 if not sess["stack"]:

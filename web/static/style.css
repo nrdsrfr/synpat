@@ -50,3 +50,24 @@ h2 .ico,#dev-table th .ico{vertical-align:-3px;margin-right:2px}
 #load-list label{display:flex;align-items:center;gap:6px;padding:2px 6px;cursor:pointer;font-size:12px;border-radius:3px}
 #load-list label:hover{background:#262a31}#load-list input{margin:0}
 #load-title .ico{width:16px;height:16px}#load-title .arrow{color:var(--dim);margin:0 4px}
+
+.modes{display:flex;gap:14px;margin:0 0 6px}.modes label{display:flex;align-items:center;gap:4px;cursor:pointer}.modes input{margin:0 2px 0 4px}
+.picker[hidden]{display:none}
+.cell.planned{border:1px dashed var(--acc);background:#3a3220;opacity:1}.cell.planned .t{color:var(--acc)}
+.cell.conflict{border:1px dashed var(--bad);background:#3b2326;opacity:1}
+.cell.changed.result{border-style:solid}
+#queue-panel{margin:0 14px 10px;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:8px}
+#queue-list{list-style:none;margin:6px 0 0;padding:0;max-height:260px;overflow:auto}
+#queue-list li{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:3px 6px;border-bottom:1px solid var(--line);font-size:12px}
+#queue-list li.bad{background:#3b232640}#queue-list li.ok .st{color:var(--ok)}#queue-list li .st.err{color:var(--bad)}
+#queue-list .n{color:var(--dim);min-width:18px;text-align:right}
+#queue-list input.kit{width:58px}#queue-list label.force{display:inline-flex;align-items:center;gap:2px;color:var(--dim)}
+#queue-list li.needforce label.force{color:var(--acc);font-weight:600}
+#queue-list .btns{margin-left:auto;display:inline-flex;gap:3px}#queue-list .btns button{padding:0 6px}
+#queue-list .warn{flex-basis:100%;margin-left:24px;color:var(--acc);font-size:11px}
+#queue-list .err{flex-basis:100%;margin-left:24px;color:var(--bad);font-size:11px}
+#run-summary{margin-top:8px;border:1px solid var(--line);border-radius:4px;padding:6px 8px;background:#16181c;font-size:12px}
+#run-summary div{margin:2px 0}#run-summary .bad{color:var(--bad)}#run-summary .good{color:var(--ok)}
+label.out{display:flex;align-items:center;gap:6px;margin:6px 0;flex-wrap:wrap}
+#run-dialog select{max-width:100%}
+#kit{width:150px}

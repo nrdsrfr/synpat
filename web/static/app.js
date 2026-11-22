@@ -1,31 +1,37 @@
+// Pattern mover UI: pick a source and a base (destination) project -- each a local file or a Syntakt slot --
+// queue many pattern copies, validate the whole queue on the server, then run it once.
 import { Midi } from './midi.js';
-import { esc, rich, folderIcon, deviceIcon } from './icons.js';
-const $ = id => document.getElementById(id);
-const BANKS = 'ABCDEFGH';
-const lbl = i => `${BANKS[i >> 4]}${String(i % 16 + 1).padStart(2, '0')}`;
-const state = { src: null, srcFile: null, srcSel: null, dstSel: null, session: null, deviceSlot: null, pendingForce: null };
+import { esc, icon, folderIcon, deviceIcon } from './icons.js';
+import { $, BANKS, lbl, pad3, verText, state, hooks, log, api, projOf, outName, fileOf, deviceOrigin } from './common.js';
+import * as D from './device.js';
 
-// kind: 'dev' (operation on the Syntakt) or 'local' (file on this computer) prefixes the matching icon;
-// {dev}/{dir} tokens inside msg are expanded to icons too.
-function log(msg, cls = '', kind = '') {
-  const d = document.createElement('div'); if (cls) d.className = cls;
-  const pre = kind === 'dev' ? deviceIcon : kind === 'local' ? folderIcon : '';
-  d.innerHTML = `<span class="ts">${new Date().toLocaleTimeString()}</span> ${pre}${rich(msg)}`;
-  $('log').prepend(d);
-}
-const projOf = id => state.projects?.find(p => p.id === id);
-const outName = () => (state.outputDir || 'OUTPUT').split('/').filter(Boolean).pop();
-const whereHtml = (id, extra = '') => {
-  const p = projOf(id);
-  return `${folderIcon}<span><b>${esc(p ? p.dir : '?')}</b> / ${esc(p ? p.file : id.split('/').slice(1).join('/'))}</span>${extra}`;
+const plan = {
+  src: null, srcFile: null, srcKind: 'local', srcSel: null, dstSel: null,
+  dest: null,        // { fileId, kind: 'local' | 'device' }: the base project the queue is applied to
+  queue: [],         // ops: { sourceFileId, sourceKind, sourceLabel, srcProjName, patName, srcSlot, dstSlot, kitSlot, force }
+  sim: null,         // last /api/plan/validate response { ok, results[], project, key }; null while revalidating
+  view: null,        // last good simulated project, so the grid does not blank while revalidating
+  session: null,     // working copy after a run (server session state)
+  ranOps: [], savedAs: null, summary: null, outputsBusy: false,  // outputsBusy: save/device write in progress
 };
-async function api(path, body) {
-  const r = await fetch('/api/' + path, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  const j = await r.json();
-  if (!r.ok) { const e = new Error(j.error || r.statusText); e.data = j; e.status = r.status; throw e; }
-  return j;
+
+// ---------- labels ----------
+function sourceLabel(fileId, kind) {
+  const o = deviceOrigin(fileId);
+  if (kind === 'device' && o) return `${pad3(o.slot)} ${o.name} (read ${o.time})`;
+  const p = projOf(fileId);
+  return p ? `${p.dir} / ${p.file}` : fileOf(fileId);
 }
-const verText = v => `v0x${v.toString(16).toUpperCase().padStart(2, '0')}`;
+function whereHtml(fileId, kind, extra = '') {
+  const o = deviceOrigin(fileId), p = projOf(fileId);
+  const where = p ? `<b>${esc(p.dir)}</b> / ${esc(p.file)}` : esc(fileOf(fileId));
+  if (kind === 'device' && o) {
+    return `${deviceIcon}<span><b>Syntakt</b> slot ${pad3(o.slot)} ${esc(o.name)} (read ${o.time})</span><span class="tag">${folderIcon} backup: ${where}</span>${extra}`;
+  }
+  return `${folderIcon}<span>${where}</span>${o ? `<span class="tag">device backup of slot ${pad3(o.slot)}</span>` : ''}${extra}`;
+}
+const destSlots = () => plan.session ? plan.session.dest.slots : (plan.sim ?? plan.view)?.project?.slots;
+const destVersion = () => plan.session ? plan.session.dest.version : (plan.sim ?? plan.view)?.project?.version;
 
 // ---------- grids ----------
 const DEVICE_BADGE = '<svg class="ico dev badge" role="img" aria-label="On Syntakt: pattern currently selected on the device"><title>On Syntakt: pattern currently selected on the device</title><use href="#i-device"/></svg>';
@@ -38,82 +44,133 @@ function buildGrid(el, side) {
     el.appendChild(c);
   }
 }
-function paint(el, slots, sel, side) {
+/** dst slot -> { ok, text, title } for queued ops (a failing op marks the cell as a conflict). */
+function plannedCells() {
+  const map = new Map();
+  if (plan.session || !plan.sim) return map;
+  plan.queue.forEach((op, i) => {
+    const r = plan.sim.results[i]; if (!r) return;
+    const cur = map.get(op.dstSlot) || { ok: true, text: '', title: [] };
+    cur.ok = cur.ok && r.ok;
+    if (!cur.text || !r.ok) cur.text = `${r.ok ? '←' : '✗'} #${i + 1} ${op.srcProjName}`;
+    cur.title.push(`#${i + 1} ${op.sourceLabel} ${lbl(op.srcSlot)} → ${lbl(op.dstSlot)}${r.ok ? '' : ': ' + r.error}`);
+    map.set(op.dstSlot, cur);
+  });
+  return map;
+}
+function paint(el, slots, sel, planned) {
   [...el.children].forEach((c, i) => {
-    const s = slots?.[i];
-    c.querySelector('.l').textContent = `${BANKS[i >> 4]}${String(i % 16 + 1).padStart(2, '0')}`;
+    const s = slots?.[i], pl = planned?.get(i);
+    c.querySelector('.l').textContent = lbl(i);
     c.querySelector('.n').textContent = s ? s.name : '';
-    c.querySelector('.t').textContent = s && !s.empty ? `${s.trigs}t` : '';
-    c.title = s ? `${s.label} "${s.name}" kit ${s.kit} ${s.kitName} · ${s.tempo} BPM · ${s.trigs} trigs · ${s.locks} locks` : '';
-    c.classList.toggle('empty', !s || s.empty);
+    c.querySelector('.t').textContent = pl ? pl.text : (s && !s.empty ? `${s.trigs}t` : '');
+    c.title = (s ? `${s.label} "${s.name}" kit ${s.kit} ${s.kitName} · ${s.tempo} BPM · ${s.trigs} trigs · ${s.locks} locks` : '') + (pl ? '\n' + pl.title.join('\n') : '');
+    c.classList.toggle('empty', !s || (s.empty && !pl));
     c.classList.toggle('sel', sel === i);
     c.classList.toggle('changed', !!(s && s.changed));
+    c.classList.toggle('result', !!plan.session);
+    c.classList.toggle('planned', !!pl && pl.ok);
+    c.classList.toggle('conflict', !!pl && !pl.ok);
     c.classList.toggle('device', state.deviceSlot === i);
   });
 }
-function repaint() {
-  paint($('src-grid'), state.src?.slots, state.srcSel, 'src');
-  paint($('dst-grid'), state.session?.dest.slots, state.dstSel, 'dst');
-  const s = state.session;
-  $('dst-ver').textContent = s ? `${s.dest.name} · ${verText(s.dest.version)}` : 'no working copy';
-  $('src-ver').textContent = state.src ? `${state.src.name} · ${verText(state.src.version)}` : '';
-  $('undo').disabled = !s || !s.undoDepth;
-  $('save').disabled = !s || !s.undoDepth;
-  $('discard').disabled = !s;
-  $('apply').disabled = !(s && state.src && state.srcSel !== null && state.dstSel !== null);
-  $('session-info').textContent = s ? `${s.undoDepth} change(s)` : '';
-  $('src-where').innerHTML = state.srcFile ? whereHtml(state.srcFile) : '';
-  $('dst-where').innerHTML = s ? whereHtml(s.file, ` <span class="tag">working copy</span>${s.undoDepth ? ' <span class="unsaved" title="Not saved to a file yet">● unsaved</span>' : ''}`) : '';
-  if (s && state.src && s.dest.version !== state.src.version) {
-    $('dst-ver').textContent += ` ⚠ source is ${verText(state.src.version)} (cross-version copy converts)`;
+
+// ---------- queue ----------
+function opRowHtml(op, i, r, locked) {
+  const kind = op.sourceKind === 'device' ? 'device' : 'folder';
+  const cls = locked ? 'ok' : !r ? '' : r.ok ? 'ok' : `bad${r.forceable ? ' needforce' : ''}`;
+  const status = locked ? '<span class="st">✓ applied</span>'
+    : !r ? '<span class="st">validating…</span>'
+    : r.ok ? `<span class="st">✓ ok${r.warnings.length ? ` · ${r.warnings.length} warning(s)` : ''}</span>`
+    : '<span class="st err">✗ not applicable</span>';
+  const controls = locked ? '' : `
+    <label>kit <input class="kit" name="kit-${i}" aria-label="Kit slot for operation ${i + 1}" type="number" min="1" max="128" value="${Number(op.kitSlot) + 1}" data-i="${i}"></label>
+    <label class="force" title="Override refusals (non-empty destination, shared/duplicate kit or slot, lossy conversion)"><input type="checkbox" class="force" name="force-${i}" data-i="${i}" ${op.force ? 'checked' : ''}> force</label>
+    <span class="btns"><button data-act="up" data-i="${i}" ${i === 0 ? 'disabled' : ''} title="Move up">↑</button><button data-act="down" data-i="${i}" ${i === plan.queue.length - 1 ? 'disabled' : ''} title="Move down">↓</button><button data-act="rm" data-i="${i}" title="Remove from queue">✕</button></span>`;
+  const msgs = locked || !r ? '' : (r.ok ? r.warnings.map(w => `<div class="warn">⚠ ${esc(w)}</div>`) : [`<div class="err">${esc(r.error)}</div>`]).join('');
+  return `<li class="${cls}"><span class="n">${i + 1}</span>${icon(kind)}<span class="srcname">${esc(op.sourceLabel)}</span>`
+    + `<span><b>${lbl(op.srcSlot)}</b> ${esc(op.patName)} → <b>${lbl(op.dstSlot)}</b>${locked ? ` (kit ${Number(op.kitSlot) + 1})` : ''}</span>${controls}${status}${msgs}</li>`;
+}
+function renderQueue() {
+  const locked = !!plan.session, ops = locked ? plan.ranOps : plan.queue;
+  $('queue-list').innerHTML = ops.map((op, i) => opRowHtml(op, i, plan.sim?.results[i], locked)).join('');
+  const bad = plan.sim ? plan.sim.results.filter(r => !r.ok).length : 0;
+  $('queue-count').textContent = ops.length ? `${ops.length} operation(s)${locked ? ' — run' : bad ? ` — ${bad} with errors` : ''}` : '';
+  $('queue-note').hidden = ops.length > 0 || locked;
+}
+function renderSummary() {
+  const s = plan.summary, box = $('run-summary');
+  box.hidden = !s;
+  if (!s) return;
+  const lines = [`<div class="good">✓ ${s.ops} operation(s) applied to the working copy${s.warnings.length ? `, ${s.warnings.length} warning(s)` : ''}</div>`];
+  s.warnings.forEach(w => lines.push(`<div class="warn">⚠ ${esc(w)}</div>`));
+  if (s.save) lines.push(s.save.error ? `<div class="bad">${folderIcon} not saved: ${esc(s.save.error)}</div>` : `<div class="good">${folderIcon} saved: <b>${esc(s.save.file)}</b></div>`);
+  if (s.device) {
+    const d = s.device;
+    lines.push(d.cancelled ? `<div>${deviceIcon} device write to slot ${pad3(d.slot)} cancelled</div>`
+      : d.partialWrite ? `<div class="bad">${deviceIcon} PARTIAL write — check slot ${pad3(d.slot)} on the device (it may hold an incomplete project): ${esc(d.error)}</div>`
+      : d.writeCompleted ? `<div class="bad">${deviceIcon} written to slot ${pad3(d.slot)}, NOT verified (read-back failed): ${esc(d.error)}</div>`
+      : d.error ? `<div class="bad">${deviceIcon} device write failed (nothing written): ${esc(d.error)}</div>`
+      : d.verified === true ? `<div class="good">${deviceIcon} written to Syntakt slot <b>${pad3(d.slot)}</b> · verified ✓</div>`
+      : d.verified === false ? `<div class="bad">${deviceIcon} written to slot ${pad3(d.slot)} but VERIFY FAILED (${d.mismatches.length} mismatch(es))</div>`
+      : `<div>${deviceIcon} written to slot ${pad3(d.slot)} (not verified)</div>`);
+  }
+  lines.push('<div class="tag">Undo run reverts only the local working copy; saved files and device writes are not undone.</div>');
+  box.innerHTML = lines.join('');
+}
+function updateButtons() {
+  const busy = D.dev.busy || plan.outputsBusy, locked = !!plan.session;
+  $('run').disabled = busy || locked || !plan.dest || !plan.queue.length || !plan.sim?.ok;
+  $('run').hidden = locked;
+  $('clear-queue').disabled = busy || !plan.queue.length; $('clear-queue').hidden = locked;
+  for (const id of ['undo-run', 'outputs', 'new-queue']) { $(id).hidden = !locked; $(id).disabled = busy; }
+  $('queue-hint').textContent = locked ? 'result is a working copy; use Outputs… to save or write it'
+    : !plan.dest ? 'choose a destination project first' : plan.queue.length && plan.sim && !plan.sim.ok ? 'fix or force the operations marked ✗ to enable Run' : '';
+  for (const side of ['src', 'dst']) $(`${side}-dev-read`).disabled = busy || !D.connected() || !$(`${side}-dev`).value;
+}
+function render() {
+  paint($('src-grid'), plan.src?.slots, plan.srcSel);
+  paint($('dst-grid'), destSlots(), plan.dstSel, plannedCells());
+  const dv = destVersion();
+  const cross = plan.src && dv && plan.src.version !== dv ? ` <span class="tag" title="Pattern and kit are converted when copied">⚠ ${verText(plan.src.version)} → ${verText(dv)} converted</span>` : '';
+  $('src-where').innerHTML = plan.srcFile ? whereHtml(plan.srcFile, plan.srcKind, `<span class="ver">${plan.src ? esc(plan.src.name) + ' · ' + verText(plan.src.version) : ''}</span>${cross}`) : '';
+  const state_ = plan.session ? ` <span class="tag">working copy (run result)</span>${plan.savedAs ? '' : ' <span class="unsaved" title="Not saved to a file yet">● unsaved</span>'}`
+    : plan.queue.length ? ' <span class="tag">+ planned changes (not written)</span>' : '';
+  $('dst-where').innerHTML = plan.dest ? whereHtml(plan.dest.fileId, plan.dest.kind, `<span class="ver">${dv ? verText(dv) : ''}</span>${state_}`) : '';
+  renderQueue(); renderSummary(); updateButtons();
+}
+
+// ---------- validation and persistence ----------
+let valSeq = 0, persistTimer, planRev = 0, persistChain = Promise.resolve();
+const planSnapshot = () => ({ dest: plan.dest, queue: plan.queue, ranOps: plan.ranOps, savedAs: plan.savedAs, srcFile: plan.srcFile, srcKind: plan.srcKind });
+async function sendPlan() {
+  try { planRev = (await api('plan/store', { plan: planSnapshot(), rev: planRev })).rev; }
+  catch (e) {
+    if (e.status === 409 && e.data?.rev !== undefined) {
+      log('The queue was changed in another tab; reloaded the stored one.', 'warn', 'local'); await restore();
+    } else log('could not store the queue: ' + e.message, 'warn', 'local');
   }
 }
-
-// ---------- preview ----------
-async function showPreview(side, i) {
-  if (side === 'src' ? !state.srcFile : !state.session) return;
+function persist() {
+  clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => { persistChain = persistChain.then(sendPlan); }, 150);
+}
+async function revalidate() {
+  const seq = ++valSeq;
+  if (!plan.dest || plan.session) { plan.sim = null; plan.view = null; return render(); }
   try {
-    const p = side === 'src'
-      ? await api(`preview?file=${encodeURIComponent(state.srcFile)}&slot=${i}`)
-      : await api(`session/preview?slot=${i}`);
-    drawPreview(p, side);
-  } catch (e) { /* preview is best-effort */ }
-}
-function drawPreview(p, side) {
-  $('preview-title').textContent = `Preview (${side === 'src' ? 'source' : 'destination'}) ${p.label} "${p.name}" · ${p.trigs} trigs`;
-  const cv = $('preview'), g = cv.getContext('2d'), cw = 10, ch = 14;
-  g.clearRect(0, 0, cv.width, cv.height);
-  p.tracks.forEach((row, t) => row.forEach((on, s) => {
-    g.fillStyle = on ? '#e8a33d' : (s % 4 === 0 ? '#2b303a' : '#1d2129');
-    g.fillRect(s * cw, t * ch, cw - 1, ch - 1);
-  }));
-}
-let hoverTimer;
-function hover(e) {
-  const c = e.target.closest('.cell'); if (!c) return;
-  clearTimeout(hoverTimer);
-  if (c.dataset.side === 'dst' && !state.session) return;
-  if (c.dataset.side === 'src' && !state.src) return;
-  hoverTimer = setTimeout(() => showPreview(c.dataset.side, +c.dataset.i), 120);
-}
-
-// ---------- apply ----------
-async function apply(force = false) {
-  if (!state.session || !state.src || state.srcSel === null || state.dstSel === null) return;
-  const req = { srcFile: state.srcFile, srcSlot: state.srcSel, dstSlot: state.dstSel, kit: $('kit').value, force };
-  try {
-    const r = await api('session/apply', req);
-    state.session = r;
-    log(`Applied ${lbl(state.srcSel)} → ${lbl(state.dstSel)}`, 'ok', 'local');
-    (r.warnings || []).forEach(w => log('warning: ' + w, 'warn', 'local'));
-    repaint(); showPreview('dst', state.dstSel);
+    const r = await api('plan/validate', { destFileId: plan.dest.fileId, ops: plan.queue });
+    if (seq !== valSeq) return;
+    plan.sim = r; plan.view = r;
   } catch (e) {
-    log('refused: ' + e.message, 'err', 'local');
-    if (e.data?.refusal && !force && confirm(e.message + '\n\nForce the copy anyway?')) return apply(true);
+    if (seq !== valSeq) return;
+    plan.sim = null; log('validation failed: ' + e.message, 'err', 'local');
   }
+  render();
 }
+function queueChanged() { plan.sim = null; render(); revalidate(); persist(); }
 
-// ---------- projects ----------
+// ---------- project selection ----------
 async function loadProjects(quiet = false) {
   const r = await api('projects');
   state.outputDir = r.output; state.projects = r.projects;
@@ -128,60 +185,228 @@ async function loadProjects(quiet = false) {
     }
     sel.value = keep;
   }
+  $('out-dir').textContent = outName();
   if (quiet) return;
   const bad = r.projects.filter(p => !p.supported);
   log(`${r.projects.length} local projects found, ${bad.length} unsupported (${bad.map(p => p.file + ': ' + p.error).join(' | ').slice(0, 400)})`, '', 'local');
 }
-async function pickSource() {
-  state.srcFile = $('src-pick').value; state.srcSel = null;
-  if (!state.srcFile) { state.src = null; return repaint(); }
-  try { state.src = await api('project?file=' + encodeURIComponent(state.srcFile)); }
-  catch (e) { log(e.message, 'err', 'local'); state.src = null; }
-  repaint();
+async function setSource(fileId, kind, quiet = false) {
+  plan.srcFile = fileId || null; plan.srcKind = kind; plan.srcSel = null; plan.src = null;
+  if (fileId) {
+    if (kind === 'local') $('src-pick').value = fileId;
+    setMode('src', kind);
+    try { plan.src = await api('project?file=' + encodeURIComponent(fileId)); }
+    catch (e) { log(e.message, 'err', 'local'); plan.srcFile = null; }
+  }
+  render(); if (!quiet) persist();
 }
-async function openDest() {
-  const f = $('dst-pick').value; if (!f) return;
-  if (state.session?.undoDepth && !confirm('Discard unsaved changes in the current working copy?')) return;
-  try { state.session = await api('session/open', { file: f }); state.dstSel = null; log('Opened working copy of ' + f, '', 'local'); }
-  catch (e) { log(e.message, 'err', 'local'); }
-  repaint();
+async function setDest(fileId, kind) {
+  if (plan.session && !confirm('Leave the run result? The working copy is discarded (saved files and device writes stay).')) { $('dst-pick').value = plan.dest.fileId; return; }
+  if (plan.session) await discardSession();
+  plan.dest = fileId ? { fileId, kind } : null; plan.dstSel = null; plan.sim = null; plan.view = null;
+  if (fileId && kind === 'local') $('dst-pick').value = fileId;
+  if (fileId) setMode('dst', kind);
+  render(); await revalidate(); persist();
+}
+function setMode(side, mode) {
+  document.querySelector(`input[name="${side}-mode"][value="${mode}"]`).checked = true;
+  $(`${side}-local-row`).hidden = mode !== 'local'; $(`${side}-dev-row`).hidden = mode !== 'device';
+  if (side === 'dst') $('dst-note').hidden = mode !== 'device';
+}
+function populateDevSelects() {
+  for (const side of ['src', 'dst']) {
+    const sel = $(`${side}-dev`), keep = sel.value;
+    const occupied = (state.devList || []).filter(p => !p.empty);
+    sel.innerHTML = state.devList ? '<option value="">— choose an occupied slot —</option>' + occupied.map(p => `<option value="${p.slot}" data-name="${esc(p.name)}">${pad3(p.slot)} ${esc(p.name)}</option>`).join('')
+      : '<option value="">— connect to the Syntakt in the Device panel first —</option>';
+    sel.value = keep;
+  }
+  updateButtons();
+}
+async function readDevicePick(side) {
+  const sel = $(`${side}-dev`), slot = +sel.value; if (!slot) return;
+  const r = await D.readSlot(slot, sel.selectedOptions[0].dataset.name);
+  if (!r?.id) return;
+  if (side === 'src') await setSource(r.id, 'device'); else await setDest(r.id, 'device');
 }
 
-// ---------- events ----------
+// ---------- adding operations ----------
+function addOp(srcSlot, dstSlot) {
+  if (plan.session) return log('The queue was already run: use Undo run or New queue first.', 'warn', 'local');
+  if (!plan.src || !plan.srcFile) return log('Choose a source project first.', 'warn', 'local');
+  if (!plan.dest) return log('Choose a destination project first.', 'warn', 'local');
+  const kit = parseInt($('kit').value, 10);
+  const kitSlot = Number.isInteger(kit) && kit >= 1 && kit <= 128 ? kit - 1 : dstSlot;
+  const s = plan.src.slots[srcSlot];
+  plan.queue.push({ sourceFileId: plan.srcFile, sourceKind: plan.srcKind, sourceLabel: sourceLabel(plan.srcFile, plan.srcKind),
+    srcProjName: plan.src.name, patName: s.name, srcSlot, dstSlot, kitSlot, force: false });
+  log(`Queued #${plan.queue.length}: ${lbl(srcSlot)} ${s.name} → ${lbl(dstSlot)}`, '', plan.srcKind === 'device' ? 'dev' : 'local');
+  queueChanged();
+}
+$('queue-list').addEventListener('click', e => {
+  const b = e.target.closest('button[data-act]'); if (!b || plan.session) return;
+  const i = +b.dataset.i, q = plan.queue;
+  if (b.dataset.act === 'rm') q.splice(i, 1);
+  else { const j = b.dataset.act === 'up' ? i - 1 : i + 1; if (j < 0 || j >= q.length) return; [q[i], q[j]] = [q[j], q[i]]; }
+  queueChanged();
+});
+$('queue-list').addEventListener('change', e => {
+  const el = e.target, op = plan.queue[+el.dataset.i]; if (!op || plan.session) return;
+  if (el.classList.contains('kit')) { const v = parseInt(el.value, 10); op.kitSlot = Number.isInteger(v) ? Math.min(127, Math.max(0, v - 1)) : op.dstSlot; }
+  else if (el.classList.contains('force')) op.force = el.checked;
+  queueChanged();
+});
+$('clear-queue').onclick = () => { plan.queue = []; queueChanged(); };
+
+// ---------- preview ----------
+async function showPreview(side, i) {
+  if (side === 'src' ? !plan.srcFile : !(plan.session || plan.sim)) return;
+  try {
+    const p = side === 'src' ? await api(`preview?file=${encodeURIComponent(plan.srcFile)}&slot=${i}`)
+      : await api(plan.session ? `session/preview?slot=${i}` : `plan/preview?key=${plan.sim.key}&slot=${i}`);
+    drawPreview(p, side);
+  } catch (e) { /* preview is best-effort */ }
+}
+function drawPreview(p, side) {
+  $('preview-title').textContent = `Preview (${side === 'src' ? 'source' : plan.session ? 'destination' : 'destination, planned'}) ${p.label} "${p.name}" · ${p.trigs} trigs`;
+  const cv = $('preview'), g = cv.getContext('2d'), cw = 10, ch = 14;
+  g.clearRect(0, 0, cv.width, cv.height);
+  p.tracks.forEach((row, t) => row.forEach((on, s) => {
+    g.fillStyle = on ? '#e8a33d' : (s % 4 === 0 ? '#2b303a' : '#1d2129');
+    g.fillRect(s * cw, t * ch, cw - 1, ch - 1);
+  }));
+}
+let hoverTimer;
+function hover(e) {
+  const c = e.target.closest('.cell'); if (!c) return;
+  clearTimeout(hoverTimer);
+  hoverTimer = setTimeout(() => showPreview(c.dataset.side, +c.dataset.i), 120);
+}
 for (const side of ['src', 'dst']) {
   const g = $(side + '-grid'); buildGrid(g, side);
   g.addEventListener('mouseover', hover);
   g.addEventListener('click', e => {
     const c = e.target.closest('.cell'); if (!c) return;
-    const i = +c.dataset.i;
-    if (side === 'src') state.srcSel = i; else state.dstSel = i;
-    state.lastSel = i;
-    repaint(); showPreview(side, i);
+    const i = +c.dataset.i; state.lastSel = i;
+    if (side === 'src') plan.srcSel = i;
+    else { plan.dstSel = i; if (plan.srcSel !== null) addOp(plan.srcSel, i); }
+    render(); showPreview(side, i);
   });
 }
 $('src-grid').addEventListener('dragstart', e => {
   const c = e.target.closest('.cell'); if (!c) return;
-  state.srcSel = +c.dataset.i; e.dataTransfer.setData('text/plain', c.dataset.i); repaint();
+  plan.srcSel = +c.dataset.i; e.dataTransfer.setData('text/plain', c.dataset.i); render();
 });
-$('dst-grid').addEventListener('dragover', e => { if (e.target.closest('.cell')) { e.preventDefault(); } });
+$('dst-grid').addEventListener('dragover', e => { if (e.target.closest('.cell')) e.preventDefault(); });
 $('dst-grid').addEventListener('drop', e => {
   const c = e.target.closest('.cell'); if (!c) return; e.preventDefault();
-  state.dstSel = +c.dataset.i; repaint(); apply(false);
+  plan.dstSel = +c.dataset.i; if (plan.srcSel !== null) addOp(plan.srcSel, plan.dstSel);
+  render();
 });
-$('src-pick').onchange = pickSource;
-$('dst-open').onclick = openDest;
-$('apply').onclick = () => apply(false);
-$('undo').onclick = async () => { try { state.session = await api('session/undo', {}); log('Undid last apply', '', 'local'); repaint(); } catch (e) { log(e.message, 'err', 'local'); } };
-$('discard').onclick = async () => { if (confirm('Discard the working copy?')) { state.session = await api('session/discard', {}); log('Working copy discarded', '', 'local'); repaint(); } };
-$('save').onclick = async () => {
-  try { const r = await api('session/save', { name: $('save-name').value }); state.session = r; log('Saved ' + r.saved, 'ok', 'local'); repaint(); }
-  catch (e) { log('save failed: ' + e.message, 'err', 'local'); }
+
+// ---------- pane controls ----------
+for (const side of ['src', 'dst']) {
+  document.querySelectorAll(`input[name="${side}-mode"]`).forEach(r => { r.onchange = () => setMode(side, r.value); });
+  $(`${side}-dev`).onchange = updateButtons;
+  $(`${side}-dev-read`).onclick = () => readDevicePick(side);
+}
+$('src-pick').onchange = () => setSource($('src-pick').value, 'local');
+$('dst-pick').onchange = () => setDest($('dst-pick').value, 'local');
+
+// ---------- run ----------
+function runDialog(mode) {
+  return new Promise(resolve => {
+    const dlg = $('run-dialog'), isRun = mode === 'run';
+    const o = plan.dest && deviceOrigin(plan.dest.fileId);
+    $('run-title').textContent = isRun ? 'Run queue' : 'Outputs for the working copy';
+    $('run-desc').innerHTML = isRun ? `${plan.queue.length} operation(s) will be applied to ${esc(sourceLabel(plan.dest.fileId, plan.dest.kind))}. Choose what to do with the result:`
+      : 'Choose what to do with the working copy:';
+    $('out-dir').textContent = outName();
+    $('out-save').checked = true; $('save-name').value = '';
+    const empties = (state.devList || []).filter(p => p.empty);
+    const why = !D.connected() ? 'connect to the Syntakt in the Device panel first' : !D.canWrite() ? 'this elektron-rpc.js cannot write' : !empties.length ? 'no empty slot on the device' : '';
+    $('out-slot').innerHTML = empties.map(p => `<option value="${p.slot}">${pad3(p.slot)}</option>`).join('');
+    $('out-dev').checked = false; $('out-dev').disabled = !!why; $('out-slot').disabled = !!why; $('out-dev-why').textContent = why;
+    $('out-orig').textContent = plan.dest?.kind === 'device' && o ? ` Your original stays untouched in slot ${pad3(o.slot)}.` : ' Your original project stays untouched.';
+    $('run-go').textContent = isRun ? 'Run' : 'Go';
+    const done = v => { dlg.close(); resolve(v); };
+    $('run-go').onclick = () => done({ save: $('out-save').checked, name: $('save-name').value.trim(), devSlot: $('out-dev').checked ? +$('out-slot').value : null });
+    $('run-cancel').onclick = () => done(null);
+    dlg.oncancel = () => resolve(null);
+    dlg.showModal();
+  });
+}
+async function doOutputs(opts, summary) {
+  plan.outputsBusy = true; render();
+  try { await runOutputs(opts, summary); }
+  finally { plan.outputsBusy = false; plan.summary = summary; render(); persist(); }
+}
+async function runOutputs(opts, summary) {
+  if (opts.save) {
+    try {
+      const r = await api('session/save', { name: opts.name });
+      plan.session = r; plan.savedAs = r.saved; summary.save = { file: r.saved.split('/').pop() };
+      log('Saved ' + r.saved, 'ok', 'local'); await loadProjects(true);
+    } catch (e) { summary.save = { error: e.message }; log('save failed: ' + e.message, 'err', 'local'); }
+  }
+  if (opts.devSlot) {
+    try {
+      const rev = plan.session.revision;
+      const src = await D.fetchPayload('session', rev.id);  // 409 if the working copy no longer is the validated result
+      const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', src.bytes))].map(b => b.toString(16).padStart(2, '0')).join('');
+      if (digest !== rev.sha) throw new Error(`payload does not match the validated result (sha256 ${digest.slice(0, 12)} ≠ ${rev.sha.slice(0, 12)}); nothing was written`);
+      const ver = '0x' + src.version.toString(16).toUpperCase().padStart(2, '0');
+      if (!confirm(`Write ${src.name} (rev ${rev.n} · ${rev.sha.slice(0, 8)}, v${ver}) to slot ${pad3(opts.devSlot)}?\n\nSlot ${pad3(opts.devSlot)} is empty. The device keeps its other projects.`)) {
+        summary.device = { slot: opts.devSlot, cancelled: true };
+      } else {
+        const w = await D.writeSlot(opts.devSlot, src.bytes, `${src.name} (working copy, rev ${rev.n})`);
+        summary.device = { slot: opts.devSlot, ...w };
+      }
+    } catch (e) { summary.device = { slot: opts.devSlot, error: e.message }; log('device write failed: ' + e.message, 'err', 'dev'); }
+  }
+}
+async function runQueue() {
+  if ($('run').disabled || plan.outputsBusy) return;
+  const opts = await runDialog('run'); if (!opts) return;
+  let r;
+  try { r = await api('plan/run', { destFileId: plan.dest.fileId, ops: plan.queue }); }
+  catch (e) {
+    log('run refused: ' + e.message, 'err', 'local');
+    if (e.data?.results) plan.sim = { ok: false, results: e.data.results, project: (plan.sim ?? plan.view)?.project };
+    render(); revalidate(); return;
+  }
+  plan.session = r; plan.ranOps = plan.queue; plan.queue = []; plan.sim = null; plan.savedAs = null;
+  log(`Queue run: ${plan.ranOps.length} operation(s) applied to the working copy`, 'ok', 'local');
+  (r.warnings || []).forEach(w => log('warning: ' + w, 'warn', 'local'));
+  await doOutputs(opts, { ops: plan.ranOps.length, warnings: r.warnings || [] });
+}
+async function discardSession() {
+  try { await api('session/discard', {}); } catch (e) { log(e.message, 'err', 'local'); }
+  plan.session = null; plan.summary = null; plan.savedAs = null;
+}
+$('run').onclick = runQueue;
+$('outputs').onclick = async () => {
+  if (plan.outputsBusy) return;
+  const opts = await runDialog('outputs'); if (!opts) return;
+  await doOutputs(opts, { ...(plan.summary || { ops: plan.ranOps.length, warnings: [] }), save: null, device: null });
+};
+$('undo-run').onclick = async () => {
+  if (plan.outputsBusy) return;
+  await discardSession();
+  plan.queue = plan.ranOps; plan.ranOps = [];
+  log('Run undone: working copy discarded, queue restored (saved files and device writes are not undone)', '', 'local');
+  queueChanged();
+};
+$('new-queue').onclick = async () => {
+  if (plan.outputsBusy) return;
+  if (!confirm('Discard the working copy and start a new queue? (Saved files and device writes stay.)')) return;
+  await discardSession(); plan.queue = []; plan.ranOps = []; queueChanged();
 };
 
 // ---------- MIDI ----------
 const midi = new Midi({
   onStatus: t => { $('midi-status').textContent = 'MIDI: ' + t; },
-  onProgram: (p, ch) => { state.deviceSlot = p; log(`Device Program Change ${p} (${lbl(p)}) on ch ${ch}`, '', 'dev'); repaint(); },
+  onProgram: (p, ch) => { state.deviceSlot = p; log(`Device Program Change ${p} (${lbl(p)}) on ch ${ch}`, '', 'dev'); render(); },
 });
 function fillPorts() {
   const { inputs, outputs } = midi.ports();
@@ -210,210 +435,47 @@ document.addEventListener('keydown', e => {
 midi.onPorts = fillPorts;
 midi.requestAccess({ sysex: false }).then(ok => { if (ok) fillPorts(); else $('audition').disabled = true; });
 
-repaint();
-loadProjects().catch(e => log(e.message, 'err', 'local'));
-
-// ---------- Device panel (read-only SysEx) ----------
-let rpc = null, rpcMod = null, devName = 'Device', devFirmware = '', devBusy = false;
-const fmtBytes = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : n >= 1024 ? (n / 1024).toFixed(1) + ' KB' : n + ' B';
-function setDevBusy(b) {
-  devBusy = b;
-  $('dev-connect').disabled = b; $('dev-refresh').disabled = b || !rpc;
-  document.querySelectorAll('#dev-table button.backup, #dev-table button.load').forEach(x => { x.disabled = b; });
-}
-// Device reports onProgress(done, null) per chunk (total unknown) and onProgress(n, n) at the end,
-// so show bytes read with an indeterminate <progress> until the final call.
-function showProgress(done, total, verb = 'read') {
-  const bar = $('dev-progress');
-  bar.hidden = false;
-  if (typeof total === 'number' && total > 0) { bar.max = total; bar.value = done; } else bar.removeAttribute('value');
-  return total ? `${fmtBytes(done)} / ${fmtBytes(total)} ${verb}` : `${fmtBytes(done)} ${verb}`;
-}
-function toBase64(bytes) {
-  let bin = '';
-  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  return btoa(bin);
-}
-async function backupSlot(slot, name) {
-  if (devBusy || !rpc) return;
-  if (typeof rpc.readProject !== 'function') {
-    setDev('this build of elektron-rpc.js has no readProject()', true); log('readProject() is not available', 'err', 'dev'); return;
-  }
-  setDevBusy(true); setDev(`backing up {dev} slot ${pad3(slot)} → {dir} ${outName()}…`); showProgress(0, null);
-  try {
-    log(`{dev} slot ${pad3(slot)} "${name}" → {dir} ${outName()} (reading, device is not modified)…`);
-    const res = await rpc.readProject(slot, { onProgress: (done, total) => setDev(`backing up {dev} slot ${pad3(slot)} → {dir} ${outName()}… ${showProgress(done, total)}`) });
-    if (!(res?.bytes instanceof Uint8Array) || !res.bytes.length) throw new Error('device returned no data');
-    setDev(`saving {dev} slot ${pad3(slot)} → {dir} ${outName()} (${fmtBytes(res.bytes.length)})…`);
-    const r = await api('device/backup', { slot, name: res.name || name, firmware: devFirmware || undefined, payload_b64: toBase64(res.bytes) });
-    log(`Backed up {dev} slot ${pad3(slot)} → {dir} ${r.file}`, 'ok');
-    await loadProjects(true);
-    setDev(`backed up {dev} slot ${pad3(slot)} → {dir} ${r.file}`);
-    if (r.id && confirm(`Saved ${r.file}\n\nOpen it as the SOURCE project?`)) { $('src-pick').value = r.id; await pickSource(); }
-  } catch (e) {
-    setDev(`backup of {dev} slot ${pad3(slot)} failed: ${e.message}`, true); log(`Backup of slot ${pad3(slot)} failed: ${e.message}`, 'err', 'dev');
-  } finally { $('dev-progress').hidden = true; setDevBusy(false); }
-}
-function setDev(text, bad = false) { const el = $('dev-status'); el.innerHTML = rich(text); el.style.color = bad ? 'var(--bad)' : ''; }
-
-const normName = t => String(t || '').trim().toLowerCase();
-const stripNum = t => t.replace(/^\d+\s+/, '');
-// Backup files are "NNN NAME.stprj" with NNN = device slot. Return exact matches (slot number AND name)
-// when there are any, else name-only matches (flagged so the UI can say so).
-function localMatches(slot, name) {
-  const n = normName(name);
-  if (!n || !state.projects) return { exact: [], nameOnly: [] };
-  const exact = [], nameOnly = [];
-  for (const p of state.projects) {
-    if (!p.supported) continue;
-    const stem = p.file.replace(/\.stprj$/i, '');
-    const m = /^(\d+)\s+(.*)$/.exec(stem);
-    const fileName = normName(m ? m[2] : stem), projName = normName(p.name);
-    if (n !== fileName && n !== projName) continue;
-    (m && +m[1] === slot ? exact : nameOnly).push(p);
-  }
-  return { exact, nameOnly };
-}
-const matchLinks = (m, tag) => `<a data-id="${esc(m.id)}" data-role="src">src</a><a data-id="${esc(m.id)}" data-role="dst">dst</a>${folderIcon}<b>${esc(m.dir)}</b> / ${esc(m.file)}${tag}`;
-function renderDeviceTable(list) {
-  const tb = $('dev-table').querySelector('tbody'); tb.innerHTML = '';
-  for (const p of list) {
-    const tr = document.createElement('tr'); if (p.empty) tr.className = 'empty';
-    let links = '';
-    if (!p.empty) {
-      const { exact, nameOnly } = localMatches(p.slot, p.name);
-      links = exact.length ? exact.map(m => matchLinks(m, '')).join('<br>')
-        : nameOnly.map(m => matchLinks(m, ' <span class="ver">(name only)</span>')).join('<br>');
-    }
-    tr.innerHTML = `<td class="slot">${deviceIcon}${p.slot}</td><td>${esc(p.name)}</td><td>${p.empty ? 'empty' : 'occupied'}</td><td>${p.empty ? `<button class="load" data-slot="${p.slot}" title="Write a local project into empty device slot ${pad3(p.slot)}"${devBusy ? ' disabled' : ''}>Load… ${folderIcon}<span class="arrow">→</span>${deviceIcon}</button>` : `<button class="backup" data-slot="${p.slot}" data-name="${esc(p.name)}" title="Back up device slot ${pad3(p.slot)} → ${esc(outName())} (reads only; the device is not modified)"${devBusy ? ' disabled' : ''}>Back up ${deviceIcon}<span class="arrow">→</span>${folderIcon}</button>`}</td><td>${links}</td>`;
-    tb.appendChild(tr);
-  }
-}
-$('dev-table').addEventListener('click', e => {
-  const btn = e.target.closest('button.backup');
-  if (btn) return backupSlot(+btn.dataset.slot, btn.dataset.name);
-  const ld = e.target.closest('button.load');
-  if (ld) return loadToSlot(+ld.dataset.slot);
-  const a = e.target.closest('a[data-id]'); if (!a) return;
-  if (a.dataset.role === 'src') { $('src-pick').value = a.dataset.id; pickSource(); }
-  else { $('dst-pick').value = a.dataset.id; openDest(); }
+// ---------- boot ----------
+Object.assign(hooks, {
+  loadProjects,
+  useLocal: (role, id) => role === 'src' ? setSource(id, 'local') : setDest(id, 'local'),
+  useDevice: (role, id) => role === 'src' ? setSource(id, 'device') : setDest(id, 'device'),
+  getSession: () => plan.session,
+  getSrcFile: () => plan.srcFile,
+  onDeviceList: populateDevSelects,
+  onBusy: updateButtons,
 });
+D.initDevice({ midi, fillPorts });
 
-async function refreshDevice() {
-  if (!rpc) return;
-  setDevBusy(true); setDev('reading…');
-  try {
-    const [ver, uid, space] = await Promise.allSettled([rpc.softwareVersion(), rpc.deviceUid(), rpc.storageSpace()]);
-    for (const r of [ver, uid]) if (r.status === 'rejected') throw r.reason;
-    let storTxt = 'n/a';
-    if (space.status === 'fulfilled') storTxt = `${fmtBytes(Number(space.value.a))} / ${fmtBytes(Number(space.value.b))} (unconfirmed meaning)`;
-    else if (!/not supported/i.test(space.reason?.message || '')) {
-      storTxt = 'error'; log('storage space: ' + space.reason?.message, 'warn', 'dev');
-    }
-    const uidTxt = typeof uid.value.uid === 'number' ? '0x' + uid.value.uid.toString(16).toUpperCase().padStart(8, '0') : '?';
-    const v = ver.value;
-    devFirmware = v.version || '';
-    $('dev-info').innerHTML = `${esc(devName)} · software <b>${esc(v.version || '?')}</b>${v.build ? ' (build ' + esc(v.build) + ')' : ''} · UID <b>${esc(uidTxt)}</b> · storage <b>${esc(storTxt)}</b>`;
-    const list = await rpc.listProjects();
-    renderDeviceTable(list);
-    setDev(`connected · ${list.filter(p => !p.empty).length} of ${list.length} slots used`);
-    log(`read ${list.length} project slots`, 'ok', 'dev');
-  } catch (e) {
-    setDev('error: ' + e.message, true); log('error: ' + e.message, 'err', 'dev');
-  } finally { setDevBusy(false); }
+const toInt = v => (typeof v === 'number' || (typeof v === 'string' && /^\d+$/.test(v))) && Number.isInteger(Number(v)) ? Number(v) : NaN;
+const inRange = v => v >= 0 && v <= 127;
+/** Coerce an op loaded from storage; null if it is malformed (slots must be integers 0..127). */
+function sanitizeOp(o) {
+  if (!o || typeof o !== 'object' || typeof o.sourceFileId !== 'string') return null;
+  const src = toInt(o.srcSlot), dst = toInt(o.dstSlot), kit = o.kitSlot == null ? dst : toInt(o.kitSlot);
+  if (![src, dst, kit].every(inRange)) return null;
+  return { sourceFileId: o.sourceFileId, sourceKind: o.sourceKind === 'device' ? 'device' : 'local', sourceLabel: String(o.sourceLabel ?? ''),
+    srcProjName: String(o.srcProjName ?? ''), patName: String(o.patName ?? ''), srcSlot: src, dstSlot: dst, kitSlot: kit, force: o.force === true };
 }
-$('dev-connect').onclick = async () => {
-  let mod;
-  try { mod = rpcMod = await import('./elektron-rpc.js'); }
-  catch (e) { setDev('device protocol module (elektron-rpc.js) is not available', true); log('cannot load elektron-rpc.js: ' + e.message, 'err', 'dev'); return; }
-  if (!midi.supported) { setDev('Web MIDI unavailable in this browser (use Chrome or Edge)', true); return; }
-  if (!await midi.requestSysexAccess()) { setDev('SysEx permission denied or MIDI unavailable', true); log('SysEx access not granted', 'err', 'dev'); return; }
-  fillPorts();
-  if (!midi.out || !midi.inp) { setDev('select the Syntakt MIDI In and Out above (none auto-detected)', true); return; }
-  try { rpc?.stop(); rpc = new mod.ElektronRpc({ input: midi.inp, output: midi.out, timeoutMs: 3000, log: m => devBusy || log('rpc: ' + (m.length > 110 ? m.slice(0, 110) + ` … (${m.length} chars)` : m), '', 'dev') }); rpc.start(); }
-  catch (e) { setDev('error: ' + e.message, true); log(e.message, 'err', 'dev'); return; }
-  setDev('connecting…');
-  try { devName = (await rpc.ping()).name || 'Device'; } catch (e) {
-    setDev('no response: ' + e.message + ' (is Elektron Transfer closed?)', true); log('ping failed: ' + e.message, 'err', 'dev');
-    $('dev-refresh').disabled = false; return;
-  }
-  await refreshDevice();
-};
+const sanitizeOps = list => (Array.isArray(list) ? list : []).map(sanitizeOp).filter(Boolean);
 
-// ---------- Load to device slot (EMPTY slots only; never overwrites) ----------
-const pad3 = n => String(n).padStart(3, '0');
-function pickLoadSource(slot) {
-  return new Promise(resolve => {
-    const dlg = $('load-dialog'), list = $('load-list');
-    const items = [];
-    if (state.session) {
-      const d = state.session.dest;
-      items.push({ value: 'session', html: `${folderIcon}<span>working copy <span class="unsaved">● unsaved edits</span> — ${esc(d.name)}, ${verText(d.version)}</span>` });
-    }
-    for (const p of state.projects || []) if (p.supported) {
-      items.push({ value: 'file:' + p.id, html: `${folderIcon}<span><b>${esc(p.dir)}</b> / ${esc(p.file)} — ${esc(p.name)} (${verText(p.version)})</span>` });
-    }
-    const def = state.session ? 'session' : (state.srcFile ? 'file:' + state.srcFile : items[0]?.value);
-    list.innerHTML = items.map((it, i) => `<label><input type="radio" name="load-src" value="${esc(it.value)}" ${it.value === def ? 'checked' : ''}>${it.html}</label>`).join('');
-    $('load-title').innerHTML = `Load a local project <span class="arrow">→</span> ${deviceIcon} slot ${pad3(slot)} <span class="tag">(empty)</span>`;
-    const done = v => { dlg.close(); resolve(v); };
-    $('load-go').onclick = () => done(list.querySelector('input:checked')?.value || null);
-    $('load-cancel').onclick = () => done(null);
-    dlg.oncancel = () => resolve(null);
-    dlg.showModal();
-    list.querySelector('input:checked')?.scrollIntoView({ block: 'nearest' });
-  });
+async function restore() {
+  const [{ plan: saved, rev }, sess] = await Promise.all([api('plan'), api('session')]);
+  planRev = rev ?? 0;
+  const savedDest = saved?.dest && typeof saved.dest.fileId === 'string' && projOf(saved.dest.fileId)
+    ? { fileId: saved.dest.fileId, kind: saved.dest.kind === 'device' ? 'device' : 'local' } : null;
+  plan.session = sess.open ? sess : null; plan.summary = null; plan.sim = null; plan.view = null;
+  plan.queue = sanitizeOps(saved?.queue); plan.ranOps = sanitizeOps(saved?.ranOps); plan.savedAs = saved?.savedAs || null;
+  if (sess.open) {
+    // The open working copy is authoritative: the destination must be the file it was run on.
+    const same = savedDest?.fileId === sess.file;
+    plan.dest = same ? savedDest : { fileId: sess.file, kind: 'local' };
+    if (!same) { plan.queue = []; plan.ranOps = []; plan.savedAs = null; }
+  } else plan.dest = savedDest;
+  if (plan.dest) { setMode('dst', plan.dest.kind); if (plan.dest.kind === 'local') $('dst-pick').value = plan.dest.fileId; }
+  if (saved?.srcFile && typeof saved.srcFile === 'string' && projOf(saved.srcFile)) await setSource(saved.srcFile, saved.srcKind === 'device' ? 'device' : 'local', true);
+  if (plan.queue.length || sess.open) log(sess.open ? 'Restored the run result (working copy) from the server' : `Restored a queue of ${plan.queue.length} operation(s) from the server`, '', 'local');
+  render(); await revalidate();
 }
-async function fetchPayload(choice) {
-  const url = choice === 'session' ? '/api/session/payload' : '/api/payload?file=' + encodeURIComponent(choice.slice(5));
-  const r = await fetch(url);
-  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
-  return {
-    bytes: new Uint8Array(await r.arrayBuffer()),
-    name: decodeURIComponent(r.headers.get('X-Project-Name') || ''),
-    version: +r.headers.get('X-Project-Version'),
-    file: choice === 'session' ? 'working copy' : decodeURIComponent(r.headers.get('X-Project-File') || ''),
-  };
-}
-async function loadToSlot(slot) {
-  if (devBusy || !rpc) return;
-  if (typeof rpc.writeProject !== 'function' || typeof rpcMod?.validatePayload !== 'function') {
-    setDev('this build of elektron-rpc.js cannot write projects (writeProject/validatePayload missing)', true);
-    log('writeProject() is not available', 'err', 'dev'); return;
-  }
-  const choice = await pickLoadSource(slot);
-  if (!choice) return;
-  setDevBusy(true); setDev(`preparing slot ${pad3(slot)}…`);
-  let result = null, failedWrite = false, errStatus = '';
-  try {
-    const src = await fetchPayload(choice);
-    const ver = '0x' + src.version.toString(16).toUpperCase().padStart(2, '0');
-    if (!confirm(`Write ${src.name} (${src.file}, v${ver}) to device slot ${pad3(slot)}?\n\nSlot ${pad3(slot)} is empty. The device keeps its other projects.`)) {
-      setDev('load cancelled'); return;
-    }
-    rpcMod.validatePayload(src.bytes);
-    log(`Writing {dir} "${src.name}" (${src.file}, ${fmtBytes(src.bytes.length)}) → {dev} slot ${pad3(slot)}…`);
-    showProgress(0, src.bytes.length, 'sent');
-    result = await rpc.writeProject(slot, src.bytes, {
-      onProgress: (done, total) => setDev(`writing slot ${pad3(slot)}… ${showProgress(done, total || src.bytes.length, 'sent')}`) });
-  } catch (e) {
-    errStatus = `load to slot ${pad3(slot)} failed: ${e.message}${e.partialWrite ? ' — PARTIAL WRITE: check the slot on the device' : ''}`;
-    setDev(errStatus, true); log(`Load to slot ${pad3(slot)} failed: ${e.message}`, 'err', 'dev');
-    if (e.partialWrite) {
-      log(`Slot ${pad3(slot)}: partial write — slot may hold an incomplete project; check it on the device${e.closeSent ? ' (WriteClose was sent)' : ''}${e.closeError ? '; close error: ' + e.closeError : ''}`, 'err', 'dev');
-      failedWrite = true;
-    } else if (e.writeCompleted) {
-      log(`Slot ${slot}: write completed but read-back failed — the project was written but could not be verified`, 'warn', 'dev');
-      failedWrite = true;
-    }
-  } finally { $('dev-progress').hidden = true; setDevBusy(false); }
-  if (failedWrite) { await refreshDevice(); setDev(errStatus, true); }
-  if (!result) return;
-  await refreshDevice();
-  if (result.verified === true) { setDev(`slot ${pad3(slot)} written · verified ✓`); log(`Slot ${pad3(slot)} written and verified ✓ (${result.name || ''})`, 'ok', 'dev'); }
-  else if (result.verified === false) {
-    const msg = `slot ${pad3(slot)} written but VERIFY FAILED: ${result.mismatches?.length ?? "?"} mismatch(es)`;
-    setDev(msg, true); log(msg + (result.mismatches?.length ? ' at ' + result.mismatches.slice(0, 20).join(',') : ''), 'err', 'dev');
-  } else { setDev(`slot ${pad3(slot)} written (not verified)`); log(`Slot ${pad3(slot)} written, not verified`, 'warn', 'dev'); }
-}
-$('dev-refresh').onclick = refreshDevice;
+render();
+loadProjects().then(restore).catch(e => log(e.message, 'err', 'local'));

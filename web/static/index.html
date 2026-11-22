@@ -27,34 +27,51 @@
     <button id="dev-refresh" disabled>Refresh</button>
     <span id="dev-status">not connected</span> <progress id="dev-progress" hidden></progress>
   </div>
-  <p class="note">Connecting, listing and "Back up" only read from the device ("Back up" saves a new .stprj in the output folder). "Load…" is the only action that writes, only to EMPTY slots, and only after you confirm; existing projects are never overwritten. Uses the MIDI In/Out selected above and asks the browser for SysEx permission.
+  <p class="note">Connecting, listing and "Back up" only read from the device ("Back up" saves a new .stprj in the output folder). Writing to the device (the "Load…" button, or "Write to Syntakt" when running a queue) only ever targets EMPTY slots, only after you confirm, and is verified by read-back; existing projects are never overwritten. Uses the MIDI In/Out selected above and asks the browser for SysEx permission.
   Close Elektron Transfer first — it holds the MIDI port.</p>
   <div id="dev-info"></div>
   <div id="dev-table-wrap"><table id="dev-table"><thead><tr><th><svg class="ico dev" role="img" aria-label="On Syntakt"><title>On Syntakt</title><use href="#i-device"/></svg> Slot</th><th>Name</th><th>State</th><th>Action</th><th><svg class="ico local" role="img" aria-label="Local file"><title>Local file</title><use href="#i-folder"/></svg> Local backup</th></tr></thead><tbody></tbody></table></div>
 </section>
 <main>
   <section class="pane" id="src-pane">
-    <h2><svg class="ico local" role="img" aria-label="Local file"><title>Local file</title><use href="#i-folder"/></svg> Source <span class="tag">local file</span></h2>
-    <div class="picker"><svg class="ico local" role="img" aria-label="Local file"><title>Local file</title><use href="#i-folder"/></svg><select id="src-pick"></select><span class="ver" id="src-ver"></span></div>
+    <h2>Source <span class="tag">where the patterns come from</span></h2>
+    <div class="modes" role="radiogroup" aria-label="Source type">
+      <label><svg class="ico local" role="img" aria-label="Local file"><title>Local file</title><use href="#i-folder"/></svg><input type="radio" name="src-mode" value="local" checked> Local file</label>
+      <label><svg class="ico dev" role="img" aria-label="On Syntakt"><title>On Syntakt</title><use href="#i-device"/></svg><input type="radio" name="src-mode" value="device"> Syntakt</label>
+    </div>
+    <div class="picker" id="src-local-row"><svg class="ico local" role="img" aria-label="Local file"><title>Local file</title><use href="#i-folder"/></svg><select id="src-pick"></select></div>
+    <div class="picker" id="src-dev-row" hidden><svg class="ico dev" role="img" aria-label="On Syntakt"><title>On Syntakt</title><use href="#i-device"/></svg><select id="src-dev"></select><button id="src-dev-read" title="Reads the project from the device (the device is not modified) and saves a local backup that is used as the source">Read &amp; back up</button></div>
     <div class="where" id="src-where"></div>
     <div class="grid" id="src-grid"></div>
   </section>
   <section class="pane" id="dst-pane">
-    <h2><svg class="ico local" role="img" aria-label="Local file"><title>Local file</title><use href="#i-folder"/></svg> Destination <span class="tag">local working copy</span></h2>
-    <div class="picker"><svg class="ico local" role="img" aria-label="Local file"><title>Local file</title><use href="#i-folder"/></svg><select id="dst-pick"></select><button id="dst-open">Open</button><span class="ver" id="dst-ver"></span></div>
+    <h2>Destination <span class="tag">base project the queue is applied to</span></h2>
+    <div class="modes" role="radiogroup" aria-label="Destination type">
+      <label><svg class="ico local" role="img" aria-label="Local file"><title>Local file</title><use href="#i-folder"/></svg><input type="radio" name="dst-mode" value="local" checked> Local file</label>
+      <label><svg class="ico dev" role="img" aria-label="On Syntakt"><title>On Syntakt</title><use href="#i-device"/></svg><input type="radio" name="dst-mode" value="device"> Syntakt</label>
+    </div>
+    <div class="picker" id="dst-local-row"><svg class="ico local" role="img" aria-label="Local file"><title>Local file</title><use href="#i-folder"/></svg><select id="dst-pick"></select></div>
+    <div class="picker" id="dst-dev-row" hidden><svg class="ico dev" role="img" aria-label="On Syntakt"><title>On Syntakt</title><use href="#i-device"/></svg><select id="dst-dev"></select><button id="dst-dev-read" title="Reads the project from the device (the device is not modified) and saves a local backup that is used as the base">Read &amp; back up</button></div>
     <div class="where" id="dst-where"></div>
     <div class="grid" id="dst-grid"></div>
-    <div class="actions">
-      <label>Kit slot <input id="kit" type="number" min="1" max="128" placeholder="same as dest"></label>
-      <button id="apply">Apply copy</button>
-      <button id="undo">Undo</button>
-      <button id="discard">Discard</button>
-      <input id="save-name" placeholder="output name (optional)">
-      <button id="save">Save as new file</button>
-      <span id="session-info"></span>
-    </div>
+    <p class="note" id="dst-note" hidden>An empty device slot cannot be a base: no empty-project template ships with this tool. Pick a local project or an occupied device slot.</p>
   </section>
 </main>
+<section id="queue-panel">
+  <h2>Queue <span class="tag" id="queue-count"></span></h2>
+  <div class="actions">
+    <label>Kit slot for new ops <input id="kit" name="kit" type="number" min="1" max="128" placeholder="same as dest slot"></label>
+    <button id="run" disabled>Run queue…</button>
+    <button id="clear-queue" disabled>Clear queue</button>
+    <button id="undo-run" hidden>Undo run</button>
+    <button id="outputs" hidden>Outputs…</button>
+    <button id="new-queue" hidden>New queue</button>
+    <span id="queue-hint" class="tag"></span>
+  </div>
+  <p class="note" id="queue-note">Select a source pattern, then click or drop it on a destination slot to add it to the queue. Nothing is written until you run the queue.</p>
+  <ol id="queue-list"></ol>
+  <div id="run-summary" hidden></div>
+</section>
 <section id="bottom">
   <div id="preview-box"><h3 id="preview-title">Preview</h3><canvas id="preview" width="640" height="182"></canvas></div>
   <div id="log-box"><h3>Log</h3><div id="log"></div></div>
@@ -64,6 +81,14 @@
   <p class="note">Writes to an EMPTY device slot only; occupied slots are never offered. Pick the project to send:</p>
   <div id="load-list" role="radiogroup" aria-label="Project to send"></div>
   <div class="actions"><button id="load-go" type="button">Continue…</button><button id="load-cancel" type="button">Cancel</button></div>
+</form></dialog>
+<dialog id="run-dialog"><form method="dialog" onsubmit="return false">
+  <h3 id="run-title" style="color:var(--fg)">Run queue</h3>
+  <p id="run-desc" class="note"></p>
+  <label class="out"><input type="checkbox" id="out-save" name="out-save" checked> Save to folder <svg class="ico local" role="img" aria-label="Local file"><title>Local file</title><use href="#i-folder"/></svg> <b id="out-dir">OUTPUT</b> <input id="save-name" name="save-name" placeholder="file name (optional)"></label>
+  <label class="out"><input type="checkbox" id="out-dev" name="out-dev"> Write to Syntakt <svg class="ico dev" role="img" aria-label="On Syntakt"><title>On Syntakt</title><use href="#i-device"/></svg> empty slot <select id="out-slot" name="out-slot"></select> <span id="out-dev-why" class="tag"></span></label>
+  <p class="note" id="out-dev-note">The device write goes to an EMPTY slot only and is verified by read-back. Overwriting an occupied slot is not supported yet.<span id="out-orig"></span> Device writes cannot be undone; only the local working copy can.</p>
+  <div class="actions"><button id="run-go" type="button">Run</button><button id="run-cancel" type="button">Cancel</button></div>
 </form></dialog>
 <script type="module" src="app.js"></script>
 </body></html>
