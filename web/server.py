@@ -36,6 +36,7 @@ MAX_BODY = 1 << 20
 MAX_BACKUP_BODY = 12 << 20  # base64 of up to 8 MB payload
 MAX_BACKUP_PAYLOAD = 8 << 20
 DEFAULT_FIRMWARE = "1.42"
+LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 MAX_CACHED = 8  # decoded projects (~4 MB each) kept in memory
 
 
@@ -279,6 +280,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         url = urlparse(self.path)
+        if not self._host_ok():
+            return self._json(403, {"error": "unexpected Host header; use http://localhost:PORT"})
         q = {k: v[0] for k, v in parse_qs(url.query).items()}
         if url.path == "/api/payload":
             def one():
@@ -300,8 +303,15 @@ class Handler(BaseHTTPRequestHandler):
         ctype = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
         self._send(200, target.read_bytes(), ctype + ("; charset=utf-8" if ctype.startswith("text/") or "javascript" in ctype else ""))
 
+    def _host_ok(self) -> bool:
+        """Only answer requests addressed to a loopback name (blocks DNS rebinding), also behind `-p 127.0.0.1:N:8765`."""
+        host = urlparse("//" + (self.headers.get("Host") or "")).hostname
+        return host in LOOPBACK_HOSTS
+
     def do_POST(self):
         url = urlparse(self.path)
+        if not self._host_ok():
+            return self._json(403, {"error": "unexpected Host header; use http://localhost:PORT"})
         length = int(self.headers.get("Content-Length") or 0)
         limit = MAX_BACKUP_BODY if url.path == "/api/device/backup" else MAX_BODY
         if length > limit:
@@ -402,11 +412,13 @@ def main(argv=None) -> None:
     ap.add_argument("--projects", action="append", type=Path, help="directory of .stprj files (repeatable)")
     ap.add_argument("--output", type=Path, default=ROOT.parent / "OUTPUT")
     ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--host", default="127.0.0.1",
+                    help="bind address (default 127.0.0.1; use 0.0.0.0 inside a container and publish with -p 127.0.0.1:...)")
     args = ap.parse_args(argv)
     dirs = args.projects or [ROOT.parent / "PROJECTS", ROOT.parent / "OLD BACKUP"]
     Handler.store = Store(dirs, args.output)
-    httpd = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
-    print(f"serving http://127.0.0.1:{args.port}/  projects={[str(d) for d in Handler.store.dirs]} "
+    httpd = ThreadingHTTPServer((args.host, args.port), Handler)
+    print(f"serving http://{args.host}:{args.port}/  projects={[str(d) for d in Handler.store.dirs]} "
           f"output={Handler.store.output}", flush=True)
     try:
         httpd.serve_forever()

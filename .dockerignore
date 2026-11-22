@@ -1,0 +1,9 @@
+tests
+**/__pycache__
+*.pyc
+*.stprj
+.git
+.gitignore
+OUTPUT
+node_modules
+web/tests
