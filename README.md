@@ -134,4 +134,4 @@ The Python tests use real backups from `../PROJECTS` (relative to the repository
 
 ## License
 
-No license has been chosen yet.
+MIT — see [LICENSE](LICENSE).
