@@ -46,10 +46,21 @@ SynPat is unofficial. The file format and the SysEx protocol were reverse-engine
 From the repository root:
 
 ```
+./synpat
+```
+
+On macOS you can also double-click `SynPat.command` in Finder. The launcher starts the server (`python3 -m web.server`) and opens http://127.0.0.1:8765/ in Google Chrome (falling back to the default browser, or `xdg-open` on Linux). If a SynPat server already answers on the port, it only opens the browser. Press Ctrl-C to stop the server. It needs Python 3.10 or newer.
+
+- `./synpat --no-browser` starts the server without opening a browser.
+- Any other options go to the server, for example `./synpat --port 8800 --output /path/to/OUTPUT`. `SynPat.command` takes no options; use `./synpat` for that.
+
+Manual alternative, with explicit directories:
+
+```
 python3 -m web.server --projects /path/to/PROJECTS --projects "/path/to/OLD BACKUP" --output /path/to/OUTPUT
 ```
 
-Then open http://127.0.0.1:8765/ in Chrome or Edge.
+Then open http://127.0.0.1:8765/ in Chrome or Edge. The server options:
 
 | Option | Meaning |
 |---|---|

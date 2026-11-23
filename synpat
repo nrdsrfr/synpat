@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# Start the SynPat GUI server and open it in a browser.
+#
+#   ./synpat [--no-browser] [server options]
+#
+# Server options are passed through to `python3 -m web.server` (--projects DIR, --output DIR, --port N, --host ADDR).
+# If a SynPat server already answers on the port, no second server is started; the browser is just opened.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+open_browser=1
+port=8765
+args=()
+while (($#)); do
+  case "$1" in
+    --no-browser) open_browser=0 ;;
+    --port) args+=("$1"); shift || true; args+=("${1:-}"); port="${1:-}" ;;
+    --port=*) args+=("$1"); port="${1#--port=}" ;;
+    *) args+=("$1") ;;
+  esac
+  shift || true
+done
+if ! [[ "$port" =~ ^[0-9]+$ ]] || ((port < 1 || port > 65535)); then
+  echo "synpat: invalid port '$port'" >&2; exit 2
+fi
+url="http://127.0.0.1:${port}/"
+
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "synpat: python3 not found. Install Python 3.10 or newer." >&2; exit 1
+fi
+if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)'; then
+  echo "synpat: Python 3.10 or newer is required, found $(python3 -c 'import platform; print(platform.python_version())')." >&2; exit 1
+fi
+
+# True if a SynPat server answers on the port (its project list endpoint returns JSON with "projects").
+answers() {
+  python3 -c '
+import json, sys, urllib.request
+with urllib.request.urlopen("http://127.0.0.1:%s/api/projects" % sys.argv[1], timeout=5) as r:
+    sys.exit(0 if "projects" in json.load(r) else 1)
+' "$port" >/dev/null 2>&1
+}
+
+open_url() {
+  ((open_browser)) || return 0
+  if [[ "$(uname -s)" == "Darwin" ]] && command -v open >/dev/null 2>&1; then
+    # Chrome first: Safari has no WebMIDI, which the device features need.
+    if open -Ra "Google Chrome" >/dev/null 2>&1; then open -a "Google Chrome" "$url" && return 0; fi
+    echo "synpat: Google Chrome not found; opening the default browser (device features need Chrome or Edge)." >&2
+    open "$url" && return 0
+  elif command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$url" >/dev/null 2>&1 && return 0
+  fi
+  echo "synpat: could not open a browser; open $url yourself." >&2
+}
+
+if answers; then
+  echo "SynPat is already running on $url (not starting a second server)."
+  open_url
+  exit 0
+fi
+
+# Job control gives the server its own process group, so Ctrl-C reaches this script (not the server directly)
+# and we can stop the server with a normal SIGINT.
+set -m
+python3 -m web.server ${args[@]+"${args[@]}"} &
+server_pid=$!
+
+stop_server() {
+  trap - INT TERM EXIT
+  if kill -0 "$server_pid" 2>/dev/null; then
+    kill -INT "$server_pid" 2>/dev/null || true
+    for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$server_pid" 2>/dev/null || break; sleep 0.3; done
+    if kill -0 "$server_pid" 2>/dev/null; then kill -TERM "$server_pid" 2>/dev/null || true; fi
+  fi
+  wait "$server_pid" 2>/dev/null || true
+}
+trap 'stop_server; exit 130' INT TERM
+trap stop_server EXIT
+
+# Keep waiting while the server process is alive: the first import can take 20 s or more when iCloud Drive
+# has to download the files.
+ready=0; SECONDS=0; told=0
+while ((SECONDS < 120)); do
+  if ! kill -0 "$server_pid" 2>/dev/null; then
+    echo "synpat: the server exited during startup (see the message above)." >&2; exit 1
+  fi
+  if answers; then ready=1; break; fi
+  if ((!told && SECONDS >= 10)); then
+    echo "synpat: still starting (iCloud may be downloading files)..."; told=1
+  fi
+  sleep 0.3
+done
+if ((!ready)); then
+  echo "synpat: the server did not answer on $url within 120 s (it is still running and will be stopped). If the files are in iCloud Drive, wait for the download to finish and try again." >&2; exit 1
+fi
+
+echo "SynPat is serving on $url  (Ctrl-C to stop)"
+open_url
+wait "$server_pid" || true
