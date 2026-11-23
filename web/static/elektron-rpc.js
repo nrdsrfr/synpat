@@ -1,8 +1,9 @@
 // Read-mostly client for the Elektron "midi_rpc" SysEx protocol (Syntakt), for WebMIDI: read-only requests plus one
 // guarded write path (writeProject into an EMPTY slot).
 // Recovered by static analysis of Elektron Transfer 1.10.4 and confirmed against a real Syntakt
-// (firmware strings "0097" / "1.42"): the read-only requests, project reads, and a project write into empty slot 128
-// (read back and compared; the device only rewrote the header slot field 0x15..0x18).
+// (firmware strings "0097" / "1.42"): the read-only requests, project reads, a single-chunk write into empty slot 128
+// (read back identical except the header slot field 0x15..0x18) and a 2-chunk write into empty slot 127. The device
+// decompresses and re-compresses on store, so stored bytes can differ from written ones: verification compares decoded images.
 //
 // Frame: F0 00 20 3C 10 00 + pack7([u16 A, u16 B, u8 opcode, ...args]) + F7
 //  - request: A = host message counter, B = 0
@@ -24,6 +25,8 @@ export const MAX_SLOT = 128;
 export const DEFAULT_WRITE_CHUNK = 0x8000;
 const WRITE_TIMEOUT_MS = 15000; // the device needed 2 s to store one 28 KB chunk
 const PAYLOAD_HEADER_SIZE = 0x1F;
+const MAX_IMAGE_SIZE = 64 * 1024 * 1024;
+const MAX_REPORTED_MISMATCHES = 32;
 const PAYLOAD_TRAILER_SIZE = 12;
 export const DEFAULT_READ_CHUNK = 0x800; // Transfer hard-codes 2048
 
@@ -140,6 +143,57 @@ export function validatePayload(bytes) {
   return { version: readU32(bytes, 0x11), slot0: readU32(bytes, 0x15), decompressedSize: readU32(bytes, 0x19) };
 }
 
+// Chained LZ4 blocks share one output buffer (matches may reach into earlier blocks). Decodes src[start,end) into out
+// at position `o`; returns the new output position.
+function lz4DecompressInto(out, o, src, start, end) {
+  let pos = start;
+  while (pos < end) {
+    const token = src[pos++];
+    let lit = token >> 4;
+    if (lit === 15) { let x; do { if (pos >= end) throw new Error('lz4: truncated length'); x = src[pos++]; lit += x; } while (x === 255); }
+    if (pos + lit > end || o + lit > out.length) throw new Error('lz4: literal run out of range');
+    out.set(src.subarray(pos, pos + lit), o); o += lit; pos += lit;
+    if (pos === end) return o;
+    if (pos + 2 > end) throw new Error('lz4: truncated match offset');
+    const offset = src[pos] | (src[pos + 1] << 8); pos += 2;
+    if (offset === 0 || offset > o) throw new Error(`lz4: invalid match offset ${offset}`);
+    let m = token & 15;
+    if (m === 15) { let x; do { if (pos >= end) throw new Error('lz4: truncated length'); x = src[pos++]; m += x; } while (x === 255); }
+    m += 4;
+    if (o + m > out.length) throw new Error('lz4: output overrun');
+    if (offset >= m) { out.copyWithin(o, o - offset, o - offset + m); o += m; } else { for (let k = 0; k < m; k++, o++) out[o] = out[o - offset]; }
+  }
+  throw new Error('lz4: block ended inside a sequence');
+}
+
+// Validates the payload envelope (see validatePayload) and returns the decompressed project image. The output buffer is
+// allocated once from the header's decompressed size (4,089,348 bytes for a Syntakt project); sizes above 64 MiB are refused.
+export function decodePayloadImage(bytes) {
+  const info = validatePayload(bytes);
+  if (bytes[0x1D] !== 1) throw new Error(`unsupported compression flag ${bytes[0x1D]}`);
+  if (info.decompressedSize === 0 || info.decompressedSize > MAX_IMAGE_SIZE) throw new Error(`implausible decompressed size ${info.decompressedSize}`);
+  const out = new Uint8Array(info.decompressedSize);
+  const areaEnd = bytes.length - PAYLOAD_TRAILER_SIZE;
+  let pos = PAYLOAD_HEADER_SIZE; let o = 0;
+  for (;;) {
+    const len = readU32(bytes, pos); pos += 4;
+    if (len === 0) break;
+    if (pos + len > areaEnd) throw new Error('block runs past block area');
+    o = lz4DecompressInto(out, o, bytes, pos, pos + len);
+    pos += len;
+  }
+  if (o !== out.length) throw new Error(`decompressed ${o} bytes, header says ${out.length}`);
+  return out;
+}
+
+// Offsets where two project images differ (capped at `cap`; a length difference counts the excess as mismatches).
+export function diffImages(a, b, cap = MAX_REPORTED_MISMATCHES) {
+  const out = [];
+  const n = Math.max(a.length, b.length);
+  for (let i = 0; i < n && out.length < cap; i++) if (i >= a.length || i >= b.length || a[i] !== b[i]) out.push(i);
+  return out;
+}
+
 // Offsets (outside the header slot field 0x15..0x18) where written and read-back bytes differ; a length difference
 // counts every offset beyond the shorter buffer as a mismatch.
 export function diffIgnoringSlotField(a, b) {
@@ -244,7 +298,7 @@ export function decodeWriteOpen(p) {
   if (!r.u8()) return { ok: false, error: r.left() ? r.cstr() : '' };
   return { ok: true, handle: r.u32() };
 }
-// 0xD8: u8 ok; ok -> u32 handle echo, u32 chunk index echo, u32 chunk length echo; !ok -> cstr error
+// 0xD8: u8 ok; ok -> u32 handle echo, u32 chunk index echo, u32 CUMULATIVE bytes received so far (incl. this chunk); !ok -> cstr error
 export function decodeWritePartial(p) {
   const r = new Reader(p);
   if (!r.u8()) return { ok: false, error: r.left() ? r.cstr() : '' };
@@ -497,10 +551,11 @@ export class ElektronRpc {
         const part = bytes.subarray(off, Math.min(off + chunk, size));
         const r = decodeWritePartial((await this.request(OP.DATA_WRITE_PARTIAL, argsWritePartial(open.handle, idx, part), auth, wt)).payload);
         if (!r.ok) throw new Error(`DataWritePartial[${idx}] rejected: ${r.error}`);
-        if (r.handle !== open.handle || r.index !== idx || r.len !== part.length) {
-          throw new Error(`DataWritePartial[${idx}]: unexpected reply (handle ${r.handle}, index ${r.index}, len ${r.len})`);
-        }
+        // Observed on hardware: the reply's len is the CUMULATIVE number of bytes received after this chunk.
         sent += part.length;
+        if (r.handle !== open.handle || r.index !== idx || r.len !== sent) {
+          throw new Error(`DataWritePartial[${idx}]: unexpected reply (handle ${r.handle}, index ${r.index}, len ${r.len}, expected cumulative ${sent})`);
+        }
         if (onProgress) onProgress(sent, size);
       }
     } catch (e) { primary = e; }
@@ -508,7 +563,7 @@ export class ElektronRpc {
     try {
       const c = decodeWriteClose((await this.request(OP.DATA_WRITE_CLOSE, argsWriteClose(open.handle, 1), auth, wt)).payload);
       if (!c.ok) closeErr = new Error(`DataWriteClose rejected: ${c.error}`);
-      else if (c.handle !== open.handle || c.total !== size) closeErr = new Error(`DataWriteClose: unexpected reply (handle ${c.handle}, total ${c.total}, expected ${size})`);
+      else if (c.handle !== open.handle || c.total !== size) closeErr = new Error(`DataWriteClose: unexpected reply (handle ${c.handle}, total ${c.total}, expected total bytes ${size})`);
     } catch (e) { closeErr = e; }
     if (primary) {
       primary.closeSent = true; primary.closeError = closeErr ? closeErr.message : null; primary.partialWrite = true;
@@ -524,12 +579,23 @@ export class ElektronRpc {
 
     let verified = null;
     let mismatches = [];
+    let rawIdentical = null;
     if (verify) {
       let back;
       try { back = await this.readFile(path); } catch (e) { throw Object.assign(new Error(`wrote slot ${slot} but read-back failed: ${e.message}`), { writeCompleted: true }); }
-      mismatches = diffIgnoringSlotField(bytes, back);
-      verified = mismatches.length === 0;
+      // The device decompresses and re-compresses on store, so the stored bytes can legitimately differ from the
+      // written ones. Fast path: raw-equal ignoring the slot field; otherwise compare the decoded project images.
+      rawIdentical = diffIgnoringSlotField(bytes, back).length === 0;
+      if (rawIdentical) verified = true;
+      else {
+        let imgA; let imgB;
+        try { imgA = decodePayloadImage(bytes); imgB = decodePayloadImage(back); } catch (e) {
+          return { slot, path, name: e1.name, size, verified: false, mismatches: [], rawIdentical, readbackSize: back.length, imageError: e.message };
+        }
+        mismatches = diffImages(imgA, imgB);
+        verified = mismatches.length === 0;
+      }
     }
-    return { slot, path, name: e1.name, size, verified, mismatches };
+    return { slot, path, name: e1.name, size, verified, mismatches, rawIdentical };
   }
 }

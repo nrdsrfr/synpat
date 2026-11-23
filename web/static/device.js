@@ -91,12 +91,16 @@ export async function writeSlot(slot, bytes, label) {
   if (failedWrite) { await refresh(); setDev(errMsg, true); }
   if (!result) return fail(errMsg.replace(/^load to slot \d+ failed: /, '').replace(/ — PARTIAL WRITE: .*$/, ''));
   await refresh();
-  if (result.verified === true) { setDev(`slot ${pad3(slot)} written · verified ✓`); log(`Slot ${pad3(slot)} written and verified ✓ (${result.name || ''})`, 'ok', 'dev'); }
+  const recompressed = result.verified === true && result.rawIdentical === false;
+  const note = recompressed ? ' (device re-compressed the file; project contents identical)' : '';
+  if (result.verified === true) { setDev(`slot ${pad3(slot)} written · verified ✓${note}`); log(`Slot ${pad3(slot)} written and verified ✓${note} (${result.name || ''})`, 'ok', 'dev'); }
   else if (result.verified === false) {
-    const msg = `slot ${pad3(slot)} written but VERIFY FAILED: ${result.mismatches?.length ?? '?'} mismatch(es)`;
+    const msg = result.imageError ? `slot ${pad3(slot)} written but the read-back could not be compared: ${result.imageError} (read back ${result.readbackSize ?? '?'} bytes)`
+      : `slot ${pad3(slot)} written but VERIFY FAILED: ${result.mismatches?.length ?? '?'} difference(s) in the project contents`;
     setDev(msg, true); log(msg + (result.mismatches?.length ? ' at ' + result.mismatches.slice(0, 20).join(',') : ''), 'err', 'dev');
   } else { setDev(`slot ${pad3(slot)} written (not verified)`); log(`Slot ${pad3(slot)} written, not verified`, 'warn', 'dev'); }
-  return { ok: true, verified: result.verified, mismatches: result.mismatches || [], name: result.name, error: null };
+  return { ok: true, verified: result.verified, mismatches: result.mismatches || [], rawIdentical: result.rawIdentical ?? null,
+    imageError: result.imageError || null, readbackSize: result.readbackSize ?? null, name: result.name, error: null };
 }
 
 // ---------- table ----------

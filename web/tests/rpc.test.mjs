@@ -8,7 +8,7 @@ import { crc32 } from 'node:zlib';
 import {
   READ_ONLY_OPCODES, pack7, unpack7, buildFrame, parseFrame, argsQuery, argsDataList,
   decodePing, decodeSoftwareVersion, decodeDeviceUid, decodeStorageSpace, decodeQuery, decodeDataList,
-  ElektronRpc, OP, concat, HEADER, crc32e, WRITE_OPCODES, validatePayload, diffIgnoringSlotField, argsWriteOpen, argsWritePartial, argsWriteClose, decodeWriteOpen, decodeWritePartial, decodeWriteClose, decodeReadOpen, decodeReadPartial, decodeReadClose, argsReadOpen, argsReadPartial, argsReadClose,
+  ElektronRpc, OP, concat, HEADER, crc32e, WRITE_OPCODES, validatePayload, decodePayloadImage, diffImages, diffIgnoringSlotField, argsWriteOpen, argsWritePartial, argsWriteClose, decodeWriteOpen, decodeWritePartial, decodeWriteClose, decodeReadOpen, decodeReadPartial, decodeReadClose, argsReadOpen, argsReadPartial, argsReadClose,
 } from '../static/elektron-rpc.js';
 
 const H = (s) => Uint8Array.from(s.trim().split(/\s+/).map((x) => parseInt(x, 16)));
@@ -373,7 +373,7 @@ const q8192 = (echo) => withEcho(reply(0x4400, 0x89, concat(Uint8Array.of(3), u6
 // Fake Syntakt for the slot-128 write: real frames wherever a real reply exists, synthetic only for read-back chunks 2..14
 function writeDevice({ slot = 128, nonEmpty = false, partialError = null, partialEchoIndex = null, closeError = null, openError = null, chunkQuery = null, corruptRb = -1 } = {}) {
   const log = []; const rb = Uint8Array.from(READBACK); if (corruptRb >= 0) rb[corruptRb] ^= 0xff;
-  let written = false;
+  let written = false; let cum = 0;
   const rbChunk = (i, echo) => {
     const data = rb.subarray((i - 1) * 2048, Math.min(i * 2048, rb.length)); const last = i === 14;
     const payload = concat(Uint8Array.of(1), u32(116), u32(i), u32(990 + i), Uint8Array.of(last ? 1 : 0), u32(crc32(data, 0xffffffff) >>> 0), u32(data.length), data);
@@ -391,7 +391,7 @@ function writeDevice({ slot = 128, nonEmpty = false, partialError = null, partia
         const idx = (m.payload[4] << 24 | m.payload[5] << 16 | m.payload[6] << 8 | m.payload[7]) >>> 0;
         const len = (m.payload[12] << 24 | m.payload[13] << 16 | m.payload[14] << 8 | m.payload[15]) >>> 0;
         if (m.payload.length === 16 + 28308 && !chunkQuery && partialEchoIndex === null) return [withEcho(FX.w_partial_rx, m.a)];
-        return [withEcho(reply(0x4400, 0xd8, concat(Uint8Array.of(1), u32(115), u32(partialEchoIndex ?? idx), u32(len))), m.a)];
+        return [withEcho(reply(0x4400, 0xd8, concat(Uint8Array.of(1), u32(115), u32(partialEchoIndex ?? idx), u32(cum += len))), m.a)];
       }
       case 0x59: written = true;
         return [closeError ? withEcho(reply(0x4400, 0xd9, concat(Uint8Array.of(0), cs(closeError))), m.a) : withEcho(FX.w_close_rx, m.a)];
@@ -415,7 +415,7 @@ test('writeProject(128): byte-exact WriteOpen/WritePartial/WriteClose frames (se
   const { rpc, output } = rig(dev.respond);
   const prog = [];
   const r = await rpc.writeProject(128, PAYLOAD, { onProgress: (d, t) => prog.push([d, t]) });
-  assert.deepEqual(r, { slot: 128, path: '/projects/128', name: 'BORN SLIPPY', size: 28308, verified: true, mismatches: [] });
+  assert.deepEqual(r, { slot: 128, path: '/projects/128', name: 'BORN SLIPPY', size: 28308, verified: true, mismatches: [], rawIdentical: true });
   assert.deepEqual(dev.ops(), [0x01, 0x09, 0x53, 0x57, 0x58, 0x59, 0x53, 0x54, ...Array(15).fill(0x55), 0x56]);
   const frame = (op) => output.sent.find((f) => parseFrame(f).opcode === op);
   assert.equal(hex(withSeq(frame(0x57), 4)), hex(FX.w_open_tx));
@@ -430,7 +430,7 @@ test('writeProject verify:false does not read back; verify detects a corrupted r
   const d1 = writeDevice(); const r1 = await rig(d1.respond).rpc.writeProject(128, PAYLOAD, { verify: false });
   assert.equal(r1.verified, null); assert.deepEqual(r1.mismatches, []); assert.deepEqual(d1.ops(), [0x01, 0x09, 0x53, 0x57, 0x58, 0x59, 0x53]);
   const d2 = writeDevice({ corruptRb: 5000 }); const r2 = await rig(d2.respond).rpc.writeProject(128, PAYLOAD);
-  assert.equal(r2.verified, false); assert.deepEqual(r2.mismatches, [5000]);
+  assert.equal(r2.verified, false); assert.equal(r2.rawIdentical, false); assert.match(r2.imageError, /CRC mismatch/); // corrupt read-back no longer decodes
 });
 
 test('writeProject refuses a non-empty slot: nothing but Ping/Query/DataList is sent', async () => {
@@ -503,4 +503,90 @@ test('writeProject refuses when the device does not list the write opcodes', asy
   const { rpc, output } = rig(noWrite);
   await assert.rejects(rpc.writeProject(128, PAYLOAD), /does not support opcode 0x57/);
   assert.equal(output.sent.length, 1);
+});
+
+// ================= multi-chunk write on real hardware (slot 127, 2026-11-23) =================
+// SENT = what we wrote (our own LZ4 compressor, 57233 B -> chunks 32768 + 24465); STORED = what the device holds
+// afterwards (36051 B: the device decompresses and re-compresses on store). Both decode to the same 4,089,348 B image.
+const MC = JSON.parse(readFileSync(new URL('./fixtures/multichunk-payloads.json', import.meta.url), 'utf8'));
+const SENT = Uint8Array.from(Buffer.from(MC.sent, 'base64'));
+const STORED = Uint8Array.from(Buffer.from(MC.stored, 'base64'));
+
+test('multichunk fixtures: sizes, slot fields, validate, identical decoded images', () => {
+  assert.equal(SENT.length, 57233); assert.equal(STORED.length, 36051);
+  assert.equal(validatePayload(SENT).slot0, 26); assert.equal(validatePayload(STORED).slot0, 126);
+  const t0 = performance.now();
+  const a = decodePayloadImage(SENT), b = decodePayloadImage(STORED);
+  const ms = performance.now() - t0;
+  assert.equal(a.length, 4089348); assert.deepEqual(diffImages(a, b), []);
+  assert.ok(ms < 2000, `two 4 MB decodes took ${ms} ms`);
+  assert.ok(diffIgnoringSlotField(SENT, STORED).length > 1000); // raw bytes really differ
+});
+test('decodePayloadImage rejects corrupt envelopes; diffImages caps and reports', () => {
+  const bad = Uint8Array.from(SENT); bad[5000] ^= 1;
+  assert.throws(() => decodePayloadImage(bad), /CRC mismatch/);
+  const a = new Uint8Array(100), b = new Uint8Array(100).fill(1);
+  assert.equal(diffImages(a, b).length, 32); assert.equal(diffImages(a, b, 5).length, 5);
+  assert.deepEqual(diffImages(new Uint8Array(3), new Uint8Array(5)), [3, 4]);
+});
+
+function listReply(echo, slot, name, used) {
+  const entry = concat(cs(name), Uint8Array.of(0, 2), u32(slot), u32(4194304), Uint8Array.of(0, 126, used ? 1 : 0, used ? 1 : 0));
+  return withEcho(reply(0x4400, 0xd3, concat(Uint8Array.of(1), u32(slot), u32(slot + 1), u32(1), entry)), echo);
+}
+function multiDevice({ cumulative = true, storedBytes = STORED, closeTotal = null } = {}) {
+  const log = []; let written = false; let got = 0; const handle = 2;
+  const respond = (m) => {
+    log.push({ op: m.opcode, payload: m.payload });
+    switch (m.opcode) {
+      case 0x01: return [withEcho(FX.ping, m.a)];
+      case 0x09: return [withEcho(FX.q_chunk, m.a)];
+      case 0x53: return [listReply(m.a, 127, written ? 'PPRFC TOUR' : '', written)];
+      case 0x57: return [withEcho(reply(0x4400, 0xd7, concat(Uint8Array.of(1), u32(handle))), m.a)];
+      case 0x58: { const len = (m.payload[12] << 24 | m.payload[13] << 16 | m.payload[14] << 8 | m.payload[15]) >>> 0; got += len;
+        return [withEcho(reply(0x4400, 0xd8, concat(Uint8Array.of(1), u32(handle), u32(m.payload[7]), u32(cumulative ? got : len))), m.a)]; }
+      case 0x59: written = true; return [withEcho(reply(0x4400, 0xd9, concat(Uint8Array.of(1), u32(handle), u32(closeTotal ?? got))), m.a)];
+      case 0x54: return [withEcho(reply(0x4400, 0xd4, concat(Uint8Array.of(1), u32(9), u32(2048), Uint8Array.of(1))), m.a)];
+      case 0x55: { const i = (m.payload[4] << 24 | m.payload[5] << 16 | m.payload[6] << 8 | m.payload[7]) >>> 0;
+        const data = i === 0 ? new Uint8Array(0) : storedBytes.subarray((i - 1) * 2048, i * 2048);
+        const last = i > 0 && i * 2048 >= storedBytes.length;
+        return [withEcho(reply(0x4500 + i, 0xd5, concat(Uint8Array.of(1), u32(9), u32(i), u32(1000 + i), Uint8Array.of(last ? 1 : 0), u32(i === 0 ? 0xffffffff : crc32(data, 0xffffffff) >>> 0), u32(data.length), data)), m.a)]; }
+      case 0x56: return [withEcho(reply(0x4400, 0xd6, concat(Uint8Array.of(1), u32(9), u32(storedBytes.length))), m.a)];
+      default: return null;
+    }
+  };
+  return { respond, log, ops: () => log.map((l) => l.op) };
+}
+
+test('writeProject multi-chunk: cumulative WritePartial len accepted; verified by decoded image although raw bytes differ', async () => {
+  const dev = multiDevice();
+  const { rpc } = rig(dev.respond);
+  const prog = [];
+  const r = await rpc.writeProject(127, SENT, { onProgress: (d, t) => prog.push([d, t]) });
+  assert.equal(r.verified, true); assert.deepEqual(r.mismatches, []); assert.equal(r.rawIdentical, false);
+  assert.equal(r.name, 'PPRFC TOUR'); assert.equal(r.size, 57233);
+  const parts = dev.log.filter((l) => l.op === 0x58);
+  assert.deepEqual(parts.map((l) => l.payload.length - 16), [32768, 24465]); assert.deepEqual(parts.map((l) => l.payload[7]), [0, 1]);
+  assert.deepEqual(prog.slice(0, 2), [[32768, 57233], [57233, 57233]]);
+  assert.equal(dev.ops().filter((o) => o === 0x59).length, 1);
+});
+test('writeProject: non-cumulative WritePartial len (chunk length) on chunk 1 is rejected, close still sent', async () => {
+  const dev = multiDevice({ cumulative: false });
+  const err = await rig(dev.respond).rpc.writeProject(127, SENT).catch((e) => e);
+  assert.match(err.message, /DataWritePartial\[1\]: unexpected reply.*len 24465.*expected cumulative 57233/); assert.equal(err.closeSent, true);
+  assert.equal(dev.ops().at(-1), 0x59); assert.equal(dev.ops().includes(0x54), false);
+});
+test('writeProject: read-back with a different image reports verified:false with capped image-offset mismatches', async () => {
+  // a valid payload with a different image: the real 028 BORN SLIPPY payload
+  const dev = multiDevice({ storedBytes: PAYLOAD });
+  const r = await rig(dev.respond).rpc.writeProject(127, SENT);
+  assert.equal(r.verified, false); assert.ok(r.mismatches.length > 0 && r.mismatches.length <= 32);
+});
+test('writeProject: garbage read-back is verified:false with imageError', async () => {
+  const garbage = Uint8Array.from(STORED); garbage[9000] ^= 1;
+  const r = await rig(multiDevice({ storedBytes: garbage }).respond).rpc.writeProject(127, SENT);
+  assert.equal(r.verified, false); assert.match(r.imageError, /CRC mismatch/); assert.equal(r.readbackSize, 36051);
+});
+test('writeProject: WriteClose total other than the byte count is an error', async () => {
+  await assert.rejects(rig(multiDevice({ closeTotal: 5 }).respond).rpc.writeProject(127, SENT), /DataWriteClose: unexpected reply/);
 });

@@ -111,8 +111,9 @@ function renderSummary() {
       : d.partialWrite ? `<div class="bad">${deviceIcon} PARTIAL write — check slot ${pad3(d.slot)} on the device (it may hold an incomplete project): ${esc(d.error)}</div>`
       : d.writeCompleted ? `<div class="bad">${deviceIcon} written to slot ${pad3(d.slot)}, NOT verified (read-back failed): ${esc(d.error)}</div>`
       : d.error ? `<div class="bad">${deviceIcon} device write failed (nothing written): ${esc(d.error)}</div>`
-      : d.verified === true ? `<div class="good">${deviceIcon} written to Syntakt slot <b>${pad3(d.slot)}</b> · verified ✓</div>`
-      : d.verified === false ? `<div class="bad">${deviceIcon} written to slot ${pad3(d.slot)} but VERIFY FAILED (${d.mismatches.length} mismatch(es))</div>`
+      : d.verified === true ? `<div class="good">${deviceIcon} written to Syntakt slot <b>${pad3(d.slot)}</b> · verified ✓${d.rawIdentical === false ? ' (device re-compressed the file; project contents identical)' : ''}</div>`
+      : d.verified === false && d.imageError ? `<div class="bad">${deviceIcon} written to slot ${pad3(d.slot)} but the read-back could not be compared (${esc(d.imageError)}; read back ${d.readbackSize ?? '?'} bytes)</div>`
+      : d.verified === false ? `<div class="bad">${deviceIcon} written to slot ${pad3(d.slot)} but VERIFY FAILED (${d.mismatches.length} difference(s) in the project contents)</div>`
       : `<div>${deviceIcon} written to slot ${pad3(d.slot)} (not verified)</div>`);
   }
   lines.push('<div class="tag">Undo run reverts only the local working copy; saved files and device writes are not undone.</div>');
