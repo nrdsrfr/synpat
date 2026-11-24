@@ -4,3 +4,4 @@ __pycache__/
 *.stprj
 OUTPUT/
 node_modules/
+synpat.env

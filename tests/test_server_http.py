@@ -1,4 +1,4 @@
-"""HTTP-level tests: a real server on a random port with a temp output dir (uses ../PROJECTS)."""
+"""HTTP-level tests: a real server on a random port with a temp output dir (uses the real backups, see tests/datadir.py)."""
 
 import hashlib
 import http.client
@@ -11,9 +11,9 @@ import unittest
 from pathlib import Path
 from http.server import ThreadingHTTPServer
 
+from datadir import PROJECTS
 from web import server as srv
 
-PROJECTS = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "PROJECTS"))
 DEST, SRC = "0/027 PPRFC TOUR.stprj", "0/033 SET - HOUSE.stprj"
 OPS = [{"sourceFileId": SRC, "srcSlot": 1, "dstSlot": 18, "kitSlot": 18, "force": False}]
 

@@ -43,7 +43,15 @@ SynPat is unofficial. The file format and the SysEx protocol were reverse-engine
 
 ## Quick start
 
-From the repository root:
+Tell SynPat where your backups are. Create `synpat.env` in the repository root (copy `synpat.env.example`; the file is gitignored):
+
+```
+SYNPAT_DATA=/path/to/Elektron Syntakt
+```
+
+`SYNPAT_DATA` is the folder that contains `PROJECTS`, `OLD BACKUP` and `OUTPUT`. Spaces in the path are fine and quotes are optional. `./synpat` parses this file line by line (it does not execute it) and understands only `SYNPAT_DATA`; a `SYNPAT_DATA` already set in your environment takes precedence. Without it the server falls back to the repository's parent directory, and if there is no `PROJECTS` or `OLD BACKUP` folder there it stops with a hint to set `SYNPAT_DATA`. Skip this setup if you pass `--projects` and `--output` yourself.
+
+Then, from the repository root:
 
 ```
 ./synpat
@@ -64,8 +72,8 @@ Then open http://127.0.0.1:8765/ in Chrome or Edge. The server options:
 
 | Option | Meaning |
 |---|---|
-| `--projects DIR` | Directory of `.stprj` files. Repeatable. A missing directory is ignored. Default: `../PROJECTS` and `../OLD BACKUP` (next to the repository directory). |
-| `--output DIR` | Where new files are written (created if missing). Default: `../OUTPUT`. It is also listed as a project directory, so saved results and device backups appear in the pickers. |
+| `--projects DIR` | Directory of `.stprj` files. Repeatable. A missing directory is ignored. Default: `$SYNPAT_DATA/PROJECTS` and `$SYNPAT_DATA/OLD BACKUP`. Without `SYNPAT_DATA` the repository's parent directory is used instead. |
+| `--output DIR` | Where new files are written (created if missing). Default: `$SYNPAT_DATA/OUTPUT`. It is also listed as a project directory, so saved results and device backups appear in the pickers. |
 | `--port N` | Default 8765. |
 | `--host ADDR` | Default 127.0.0.1. The server has no authentication, so keep it on loopback. Requests whose Host header is not `localhost`, `127.0.0.1` or `::1` are refused, so opening the page by LAN address does not work. |
 
@@ -131,7 +139,7 @@ python3 -B -m unittest discover tests
 node --test web/tests/rpc.test.mjs
 ```
 
-The Python tests use real backups from `../PROJECTS` (relative to the repository root) and skip the tests that need them when that directory is absent. They include HTTP-level tests that start the server on a random port with a temporary output directory. The JavaScript tests cover the protocol module against recorded device replies in `web/tests/fixtures/`.
+The Python tests use real backups from `$SYNPAT_DATA/PROJECTS` and `$SYNPAT_DATA/OLD BACKUP` (see `tests/datadir.py`). If `SYNPAT_DATA` is not set they look in the repository's parent directory, and they skip the tests that need the backups when those are absent. `synpat.env` is read only by the `./synpat` launcher, so for the tests export the variable, for example `SYNPAT_DATA="/path/to/Elektron Syntakt" python3 -B -m unittest discover tests`. They include HTTP-level tests that start the server on a random port with a temporary output directory. The JavaScript tests cover the protocol module against recorded device replies in `web/tests/fixtures/`.
 
 ## Limitations
 

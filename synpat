@@ -4,9 +4,33 @@
 #   ./synpat [--no-browser] [server options]
 #
 # Server options are passed through to `python3 -m web.server` (--projects DIR, --output DIR, --port N, --host ADDR).
+# The data folder (PROJECTS / OLD BACKUP / OUTPUT) comes from $SYNPAT_DATA or synpat.env; see synpat.env.example.
 # If a SynPat server already answers on the port, no second server is started; the browser is just opened.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
+
+# Optional settings file synpat.env (gitignored): `KEY=value` lines, '#' comments. It is parsed, never sourced,
+# so it cannot run code. Only SYNPAT_DATA is understood: the folder containing PROJECTS / OLD BACKUP / OUTPUT.
+# A SYNPAT_DATA already set in the environment wins over the file. Quotes around the value are optional (the
+# path may contain spaces); a leading ~/ is expanded; nothing else is expanded.
+if [[ -z "${SYNPAT_DATA:-}" && -f synpat.env ]]; then
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line#"${line%%[![:space:]]*}"}"; line="${line%"${line##*[![:space:]]}"}"
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*(.*)$ ]]; then
+      key="${BASH_REMATCH[1]}"; value="${BASH_REMATCH[2]}"
+      if [[ "$value" =~ ^\"(.*)\"$ || "$value" =~ ^\'(.*)\'$ ]]; then value="${BASH_REMATCH[1]}"; fi
+      if [[ "$key" == SYNPAT_DATA ]]; then
+        [[ "$value" == "~"/* ]] && value="$HOME/${value#\~/}"
+        export SYNPAT_DATA="$value"
+      else
+        echo "synpat: ignoring unknown key '$key' in synpat.env" >&2
+      fi
+    else
+      echo "synpat: ignoring malformed line in synpat.env: $line" >&2
+    fi
+  done < synpat.env
+fi
 
 open_browser=1
 port=8765

@@ -1,12 +1,12 @@
-"""Run from synpat/: python3 -B -m unittest discover tests  (uses the real backups in ../PROJECTS)."""
+"""Run from the repo root: python3 -B -m unittest discover tests  (uses the real backups, see tests/datadir.py)."""
 
 import os
 import unittest
 
 from stprj import Project, copy_pattern_with_kit, read_stprj
+from datadir import PROJECTS
 from web.plan import Op, PlanError, parse_ops, simulate
 
-PROJECTS = os.path.join(os.path.dirname(__file__), "..", "..", "PROJECTS")
 
 
 def load(name: str) -> Project:

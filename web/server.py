@@ -1,6 +1,6 @@
 """Local web GUI server for moving patterns between .stprj backups.
 
-Run from synpat/:  python3 -m web.server [--projects DIR]... [--output DIR] [--port N]
+Run from the repo root:  python3 -m web.server [--projects DIR]... [--output DIR] [--port N]
 Binds to 127.0.0.1 only. Source files are never modified.
 """
 
@@ -13,6 +13,7 @@ import hashlib
 import json
 import re
 import mimetypes
+import os
 import struct
 import sys
 import threading
@@ -493,16 +494,27 @@ class Handler(BaseHTTPRequestHandler):
         raise ApiError(404, "unknown endpoint")
 
 
+def data_dir() -> Path:
+    """Folder that contains PROJECTS / OLD BACKUP / OUTPUT: $SYNPAT_DATA, else the repository's parent directory."""
+    env = os.environ.get("SYNPAT_DATA")
+    return Path(env).expanduser() if env else ROOT.parent
+
+
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--projects", action="append", type=Path, help="directory of .stprj files (repeatable)")
-    ap.add_argument("--output", type=Path, default=ROOT.parent / "OUTPUT")
+    ap.add_argument("--output", type=Path, help="where new files are written (default: $SYNPAT_DATA/OUTPUT)")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--host", default="127.0.0.1",
                     help="bind address (default 127.0.0.1; use 0.0.0.0 inside a container and publish with -p 127.0.0.1:...)")
     args = ap.parse_args(argv)
-    dirs = args.projects or [ROOT.parent / "PROJECTS", ROOT.parent / "OLD BACKUP"]
-    Handler.store = Store(dirs, args.output)
+    data = data_dir()
+    if not args.projects and not (data / "PROJECTS").is_dir() and not (data / "OLD BACKUP").is_dir():
+        where = "$SYNPAT_DATA" if os.environ.get("SYNPAT_DATA") else f"the default {data}"
+        ap.exit(2, f"synpat: no PROJECTS or OLD BACKUP folder found in {where}.\n"
+                   "Set SYNPAT_DATA in synpat.env to the folder containing PROJECTS (or pass --projects DIR).\n")
+    dirs = args.projects or [data / "PROJECTS", data / "OLD BACKUP"]
+    Handler.store = Store(dirs, args.output or data / "OUTPUT")
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"serving http://{args.host}:{args.port}/  projects={[str(d) for d in Handler.store.dirs]} "
           f"output={Handler.store.output}", flush=True)

@@ -1,6 +1,6 @@
-"""Run from synpat/: python3 -m unittest discover tests
+"""Run from the repo root: python3 -m unittest discover tests
 
-Uses the real backups in ../PROJECTS; tests are skipped when they are absent.
+Uses the real backups (see tests/datadir.py: $SYNPAT_DATA, else the repo parent); tests are skipped when they are absent.
 """
 
 import io
@@ -9,15 +9,13 @@ import tempfile
 import unittest
 import zipfile
 
+from datadir import OLD_BACKUP, PROJECTS
 from stprj import CopyError, Project, copy_pattern_with_kit, read_stprj, write_raw_stprj, write_stprj
 from stprj.container import FormatError, decode_payload
 from stprj.lz4block import compress_block, decompress_into
 from stprj.convert import convert_kit, convert_pattern
 from stprj.layout import GEN_A, GEN_B, KIT_BASE, KIT_SIZE, PAT_KIT, PATTERN_BASE, PATTERN_SIZE
 
-ROOT = os.path.join(os.path.dirname(__file__), "..", "..")
-PROJECTS = os.path.join(ROOT, "PROJECTS")
-OLD_BACKUP = os.path.join(ROOT, "OLD BACKUP")
 
 
 def load(directory: str, name: str) -> Project:
