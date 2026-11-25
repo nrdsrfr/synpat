@@ -1,7 +1,7 @@
 /* SynPat: dark operator UI. Blue folder = local file, amber device = on the Syntakt.
    Spacing scale: 4 / 8 / 12 / 16 / 24. Type: 11 meta, 12 secondary, 13 body, 14 headings, 15 title. */
 :root{color-scheme:dark;--bg:#16181c;--panel:#1f2228;--raise:#2a2e36;--sunk:#101216;--line:#333843;--fg:#dde1e8;--dim:#98a0ae;--acc:#e8a33d;--on-acc:#1b1405;--ok:#5ec27a;--bad:#e5534b;--local:#7fb0e3;--device:#e8a33d;--sel:#4aa3ff;
-  --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px;--r:6px;--runbar-h:52px}
+  --beat:#6c7587;--s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px;--r:6px;--runbar-h:52px}
 *{box-sizing:border-box}
 html{scrollbar-color:#3a404c var(--bg)}
 body{margin:0;background:var(--bg);color:var(--fg);font:13px/1.4 -apple-system,system-ui,sans-serif;accent-color:var(--acc);padding-bottom:var(--s2);display:flex;flex-direction:column;min-height:100vh}
@@ -111,6 +111,11 @@ main{display:grid;grid-template-columns:1fr 1fr;gap:var(--s3);padding:var(--s3) 
 .cell.changed.result{border-style:solid}
 .cell .badge{display:none}
 .cell.device .badge{display:block;position:absolute;top:1px;right:1px;width:12px;height:12px;color:var(--sel);background:#16181cd9;border-radius:2px;padding:1px}
+/* Beat markers, like the Syntakt's trig keys 1, 5, 9, 13: a thin light inner frame on every row. It is a separate layer
+   (inside the border, under the text and badge), so selected / planned / conflict / changed / device states keep their own borders. */
+.grid .cell:nth-child(4n+1)::before{content:"";position:absolute;inset:1px;border:1px solid var(--beat);border-radius:2px;pointer-events:none}
+.grid .cell.empty:nth-child(4n+1)::before{border-color:#808a9b}  /* the cell is dimmed to 50%: brighten so the frame survives */
+.grid .cell.sel.empty:nth-child(4n+1)::before{border-color:var(--beat)}  /* selected empty cells are not dimmed */
 .grid-empty{position:absolute;inset:0;margin:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:var(--s4);color:var(--fg);font-size:13px;background:#1f2228d9;border-radius:3px;pointer-events:none}
 .grid-empty[hidden]{display:none}
 .gridwrap:has(.grid-empty:not([hidden])) .grid{opacity:.45}

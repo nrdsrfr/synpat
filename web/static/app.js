@@ -342,6 +342,10 @@ function drawPreview(p, side) {
   p.tracks.forEach((row, t) => row.forEach((on, s) => {
     g.fillStyle = on ? '#e8a33d' : (s % 4 === 0 ? '#2b303a' : '#1d2129');
     g.fillRect(s * cw, t * ch, cw - 1, ch - 1);
+    if (s % 4 === 0) {  // beat marker (steps 1, 5, 9, ...): the grid's inner frame, drawn at 1.5 canvas px because the canvas is shown at about half size
+      g.strokeStyle = on ? '#fff2d2' : '#5f687a'; g.lineWidth = 1.5;
+      g.strokeRect(s * cw + 1, t * ch + 1, cw - 3, ch - 3);
+    }
   }));
 }
 let hoverTimer;
