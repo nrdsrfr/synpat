@@ -1,0 +1,310 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-25T00:57:03Z",
+  "title": "Design System: SynPat",
+  "extensions": {
+    "colorMeta": {
+      "syntakt-amber": {
+        "role": "primary",
+        "displayName": "Syntakt Amber",
+        "canonical": "#e8a33d",
+        "tonalRamp": [
+          "#33240d",
+          "#5d4118",
+          "#875f23",
+          "#b57f30",
+          "#e8a33d",
+          "#eeba6e",
+          "#f4d19e",
+          "#f9e8ce"
+        ]
+      },
+      "local-blue": {
+        "role": "secondary",
+        "displayName": "Local Blue",
+        "canonical": "#7fb0e3",
+        "tonalRamp": [
+          "#1c2732",
+          "#33465b",
+          "#4a6684",
+          "#6389b1",
+          "#7fb0e3",
+          "#9fc4ea",
+          "#bfd8f1",
+          "#dfebf8"
+        ]
+      },
+      "focus-blue": {
+        "role": "secondary",
+        "displayName": "Focus Blue",
+        "canonical": "#4aa3ff",
+        "tonalRamp": [
+          "#102438",
+          "#1e4166",
+          "#2b5f94",
+          "#3a7fc7",
+          "#4aa3ff",
+          "#77baff",
+          "#a4d1ff",
+          "#d2e8ff"
+        ]
+      },
+      "bench-black": {
+        "role": "neutral",
+        "displayName": "Bench Black",
+        "canonical": "#16181c",
+        "tonalRamp": [
+          "#050506",
+          "#090a0b",
+          "#0d0e10",
+          "#111316",
+          "#16181c",
+          "#505255",
+          "#8a8c8e",
+          "#c5c5c6"
+        ]
+      },
+      "panel-slate": {
+        "role": "neutral",
+        "displayName": "Panel Slate",
+        "canonical": "#1f2228",
+        "tonalRamp": [
+          "#070709",
+          "#0c0e10",
+          "#121417",
+          "#181b1f",
+          "#1f2228",
+          "#57595e",
+          "#8f9094",
+          "#c7c8c9"
+        ]
+      },
+      "raised-slate": {
+        "role": "neutral",
+        "displayName": "Raised Slate",
+        "canonical": "#2a2e36",
+        "tonalRamp": [
+          "#090a0c",
+          "#111216",
+          "#181b1f",
+          "#21242a",
+          "#2a2e36",
+          "#5f6268",
+          "#94969a",
+          "#cacbcd"
+        ]
+      },
+      "chalk": {
+        "role": "neutral",
+        "displayName": "Chalk",
+        "canonical": "#dde1e8",
+        "tonalRamp": [
+          "#313233",
+          "#585a5d",
+          "#808287",
+          "#acb0b5",
+          "#dde1e8",
+          "#e6e8ee",
+          "#eef0f4",
+          "#f6f8f9"
+        ]
+      },
+      "ok-green": {
+        "role": "state",
+        "displayName": "OK Green",
+        "canonical": "#5ec27a",
+        "tonalRamp": [
+          "#152b1b",
+          "#264e31",
+          "#377147",
+          "#49975f",
+          "#5ec27a",
+          "#86d19b",
+          "#aee0bc",
+          "#d7f0de"
+        ]
+      },
+      "fault-red": {
+        "role": "state",
+        "displayName": "Fault Red",
+        "canonical": "#e5534b",
+        "tonalRamp": [
+          "#321210",
+          "#5c211e",
+          "#85302c",
+          "#b3413a",
+          "#e5534b",
+          "#ec7e78",
+          "#f2a9a5",
+          "#f8d4d2"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "title": {
+        "displayName": "Title",
+        "purpose": "App name and dialog titles."
+      },
+      "heading": {
+        "displayName": "Heading",
+        "purpose": "Pane and panel headings."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Controls and primary copy."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Secondary copy, tables, queue rows."
+      },
+      "meta": {
+        "displayName": "Meta",
+        "purpose": "Tags, versions, show/hide."
+      },
+      "cell": {
+        "displayName": "Cell",
+        "purpose": "Pattern cells."
+      },
+      "log": {
+        "displayName": "Log",
+        "purpose": "Monospace log and name field."
+      }
+    },
+    "shadows": [
+      {
+        "name": "menu",
+        "value": "0 8px 24px #0009",
+        "purpose": "MIDI menu."
+      },
+      {
+        "name": "panel",
+        "value": "0 12px 32px #000a",
+        "purpose": "Slots panel."
+      },
+      {
+        "name": "dialog",
+        "value": "0 16px 48px #000b",
+        "purpose": "Run and load dialogs."
+      }
+    ],
+    "motion": [
+      {
+        "name": "chevron-turn",
+        "value": "transform .15s ease-out",
+        "purpose": "Slots toggle and log disclosure chevrons; removed under prefers-reduced-motion."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "narrow",
+        "value": "1100px"
+      },
+      {
+        "name": "stack",
+        "value": "900px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Button",
+      "kind": "button",
+      "refersTo": "button",
+      "description": "Default control: raised slate, hairline border, amber border on hover.",
+      "html": "<button class=\"ds-btn\">Clear queue</button>",
+      "css": ".ds-btn{font-family:-apple-system, system-ui, sans-serif;font-size:13px;line-height:1.4;color:#dde1e8;background:#2a2e36;border:1px solid #333843;border-radius:4px;padding:3px 8px;min-height:26px;cursor:pointer}.ds-btn:hover{border-color:#e8a33d}.ds-btn:focus-visible{outline:2px solid #4aa3ff;outline-offset:1px}"
+    },
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one primary action on screen (Run queue…, then Outputs…).",
+      "html": "<button class=\"ds-btn-primary\">Run queue…</button>",
+      "css": ".ds-btn-primary{font-family:-apple-system, system-ui, sans-serif;font-size:13px;background:#e8a33d;border:1px solid #e8a33d;color:#1b1405;font-weight:650;border-radius:4px;padding:3px 16px;min-height:26px;cursor:pointer}.ds-btn-primary:hover{background:#f0b556;border-color:#f0b556}.ds-btn-primary:focus-visible{outline:2px solid #4aa3ff;outline-offset:1px}"
+    },
+    {
+      "name": "Segmented Toggle",
+      "kind": "chip",
+      "refersTo": "segmented-active",
+      "description": "Local file / Syntakt choice for Source and Destination.",
+      "html": "<div class=\"ds-seg\"><span class=\"ds-seg-on\"><svg viewBox=\"0 0 16 16\" width=\"15\" height=\"15\" style=\"color:#7fb0e3\"><path d=\"M1.5 4a1 1 0 0 1 1-1h3.4l1.6 1.8h6a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.4\" stroke-linejoin=\"round\"/><path d=\"M1.5 6.6h13\" stroke=\"currentColor\" stroke-width=\"1.2\"/></svg> Local file</span><span><svg viewBox=\"0 0 16 16\" width=\"15\" height=\"15\" style=\"color:#e8a33d\"><rect x=\"1\" y=\"2.5\" width=\"14\" height=\"11\" rx=\"1.6\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.4\"/><circle cx=\"4.6\" cy=\"5.4\" r=\"1.15\" fill=\"currentColor\"/><circle cx=\"8\" cy=\"5.4\" r=\"1.15\" fill=\"currentColor\"/><circle cx=\"11.4\" cy=\"5.4\" r=\"1.15\" fill=\"currentColor\"/><rect x=\"3.3\" y=\"8.3\" width=\"2.2\" height=\"3\" rx=\".4\" fill=\"currentColor\"/><rect x=\"6.1\" y=\"8.3\" width=\"2.2\" height=\"3\" rx=\".4\" fill=\"currentColor\"/><rect x=\"8.9\" y=\"8.3\" width=\"2.2\" height=\"3\" rx=\".4\" fill=\"currentColor\"/><rect x=\"11.7\" y=\"8.3\" width=\"1.2\" height=\"3\" rx=\".4\" fill=\"currentColor\"/></svg> Syntakt</span></div>",
+      "css": ".ds-seg{font-family:-apple-system, system-ui, sans-serif;font-size:13px;line-height:1.4;color:#dde1e8;display:inline-flex;border:1px solid #333843;border-radius:4px;overflow:hidden;background:#2a2e36}.ds-seg span{display:flex;align-items:center;gap:6px;padding:3px 12px;min-height:26px;color:#98a0ae}.ds-seg span+span{border-left:1px solid #333843}.ds-seg .ds-seg-on{background:#383e4a;color:#dde1e8}"
+    },
+    {
+      "name": "Pattern Cell (states)",
+      "kind": "custom",
+      "refersTo": "grid-cell",
+      "description": "Rest, beat marker, selected, planned, conflict and applied cells; same size in every state.",
+      "html": "<div class=\"ds-row\"><div class=\"ds-cell ds-beat\"><b>A01</b><i>BB INTRO</i><u>29t</u></div><div class=\"ds-cell\"><b>A02</b><i>BB VERSE</i><u>109t</u></div><div class=\"ds-cell ds-sel\"><b>A03</b><i>BB OUTRO</i><u>96t</u></div><div class=\"ds-cell ds-plan\"><b>A04</b><i></i><u>← #1</u></div><div class=\"ds-cell ds-bad\"><b>A05</b><i>BB …</i><u>✗ #2</u></div><div class=\"ds-cell ds-ok\"><b>A06</b><i></i><u>3t</u></div><div class=\"ds-cell ds-empty ds-beat\"><b>A07</b><i></i><u></u></div></div>",
+      "css": ".ds-row{display:grid;grid-template-columns:repeat(7,44px);gap:2px}.ds-cell{font-family:-apple-system, system-ui, sans-serif;font-size:13px;line-height:1.4;color:#dde1e8;position:relative;height:42px;border:1px solid #333843;border-radius:3px;padding:2px 3px;overflow:hidden;background:#262a31;font-size:10px;line-height:1.25}.ds-cell b{display:block;color:#e8a33d;font-weight:600}.ds-cell i{display:block;font-style:normal;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.ds-cell u{display:block;text-decoration:none;color:#98a0ae}.ds-beat::before{content:\"\";position:absolute;inset:1px;border:1px solid #6c7587;border-radius:2px;pointer-events:none}.ds-empty{opacity:.5}.ds-empty.ds-beat::before{border-color:#808a9b}.ds-sel{outline:2px solid #e8a33d;outline-offset:-1px}.ds-plan{border:1px dashed #e8a33d;background:#3a3220}.ds-plan u{color:#e8a33d}.ds-bad{border:1px dashed #e5534b;background:#3b2326}.ds-bad u{color:#f08a83}.ds-ok{background:#27402f;border-color:#5ec27a}"
+    },
+    {
+      "name": "Queue Row",
+      "kind": "custom",
+      "refersTo": "panel",
+      "description": "One operation: route, origin, kit/force, status, messages.",
+      "html": "<div class=\"ds-q\"><span class=\"ds-n\">3</span><span class=\"ds-route\"><b>A02</b> BB VERSE <i>→</i> <b>B01</b></span><span class=\"ds-src\"><svg viewBox=\"0 0 16 16\" width=\"15\" height=\"15\" style=\"color:#7fb0e3\"><path d=\"M1.5 4a1 1 0 0 1 1-1h3.4l1.6 1.8h6a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.4\" stroke-linejoin=\"round\"/><path d=\"M1.5 6.6h13\" stroke=\"currentColor\" stroke-width=\"1.2\"/></svg> PROJECTS / 027 PPRFC TOUR.stprj</span><span class=\"ds-st\"><svg viewBox=\"0 0 16 16\" width=\"13\" height=\"13\"><path d=\"M4 4l8 8M12 4l-8 8\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\"/></svg> can't apply</span><span class=\"ds-msg\"><svg viewBox=\"0 0 16 16\" width=\"12\" height=\"12\"><path d=\"M4 4l8 8M12 4l-8 8\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\"/></svg> destination pattern B01 is not empty (218 trigs) (use force to overwrite)</span></div>",
+      "css": ".ds-q{font-family:-apple-system, system-ui, sans-serif;font-size:13px;line-height:1.4;color:#dde1e8;font-size:12px;display:grid;grid-template-columns:24px 1.3fr 1fr auto;column-gap:12px;row-gap:2px;align-items:center;padding:4px 8px;border-bottom:1px solid #333843;background:#3b232640;width:640px}.ds-n{color:#98a0ae;text-align:right}.ds-route{font-size:13px}.ds-route i{color:#98a0ae;font-style:normal;margin:0 4px}.ds-src{display:flex;gap:6px;align-items:center;color:#98a0ae}.ds-st{display:inline-flex;gap:4px;align-items:center;color:#e5534b}.ds-msg{grid-column:2/-1;display:flex;gap:6px;color:#f08a83}"
+    },
+    {
+      "name": "Run Summary Line",
+      "kind": "custom",
+      "refersTo": "panel",
+      "description": "Outcome lines: icon, colour and words together.",
+      "html": "<div class=\"ds-sum\"><div class=\"ds-g\"><svg viewBox=\"0 0 16 16\" width=\"13\" height=\"13\"><path d=\"M3 8.4l3.2 3.1L13 4.6\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg> 4 operations applied to the working copy</div><div class=\"ds-g\"><svg viewBox=\"0 0 16 16\" width=\"13\" height=\"13\" style=\"color:#7fb0e3\"><path d=\"M1.5 4a1 1 0 0 1 1-1h3.4l1.6 1.8h6a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.4\" stroke-linejoin=\"round\"/><path d=\"M1.5 6.6h13\" stroke=\"currentColor\" stroke-width=\"1.2\"/></svg> saved: <b>SET - HOUSE edited.stprj</b></div><div class=\"ds-b\"><svg viewBox=\"0 0 16 16\" width=\"13\" height=\"13\" style=\"color:#e8a33d\"><rect x=\"1\" y=\"2.5\" width=\"14\" height=\"11\" rx=\"1.6\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.4\"/><circle cx=\"4.6\" cy=\"5.4\" r=\"1.15\" fill=\"currentColor\"/><circle cx=\"8\" cy=\"5.4\" r=\"1.15\" fill=\"currentColor\"/><circle cx=\"11.4\" cy=\"5.4\" r=\"1.15\" fill=\"currentColor\"/><rect x=\"3.3\" y=\"8.3\" width=\"2.2\" height=\"3\" rx=\".4\" fill=\"currentColor\"/><rect x=\"6.1\" y=\"8.3\" width=\"2.2\" height=\"3\" rx=\".4\" fill=\"currentColor\"/><rect x=\"8.9\" y=\"8.3\" width=\"2.2\" height=\"3\" rx=\".4\" fill=\"currentColor\"/><rect x=\"11.7\" y=\"8.3\" width=\"1.2\" height=\"3\" rx=\".4\" fill=\"currentColor\"/></svg> device write failed (nothing written): timeout waiting for reply</div></div>",
+      "css": ".ds-sum{font-family:-apple-system, system-ui, sans-serif;font-size:13px;line-height:1.4;color:#dde1e8;font-size:12px;background:#16181c;border:1px solid #333843;border-radius:4px;padding:8px 12px;display:grid;gap:4px;width:520px}.ds-sum>div{display:flex;gap:8px;align-items:flex-start}.ds-sum b{color:#dde1e8}.ds-g{color:#5ec27a}.ds-b{color:#f08a83}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Patch Bench",
+    "overview": "SynPat is an operator panel, used mid-task by someone with a synthesizer on the desk: a dark, flat, dense instrument-side tool of two project panes, a queue and one pinned Run bar. Few colours carry meaning (blue folder = local file, amber device = on the Syntakt, amber = planned or selected, red = blocked, green = applied). Mode: Operate.",
+    "keyCharacteristics": [
+      "Flat dark slate, tonal layers and hairlines; shadows only for floating overlays.",
+      "Amber is the single accent and never decoration.",
+      "Status is icon plus word, never colour alone.",
+      "One system sans family; monospace only for the log and the name field.",
+      "The Run action is always in reach."
+    ],
+    "rules": [
+      {
+        "name": "The Two Origins Rule",
+        "body": "Blue folder means a file on this computer; amber device means something on the Syntakt, everywhere an object has an origin.",
+        "section": "colors"
+      },
+      {
+        "name": "The Rare Amber Rule",
+        "body": "Amber marks what the user is acting on or what will change: selection, plan, primary action, device.",
+        "section": "colors"
+      },
+      {
+        "name": "The Words Beside Colour Rule",
+        "body": "Red, green and amber never stand alone: each state has an icon and a word.",
+        "section": "colors"
+      },
+      {
+        "name": "The One Family Rule",
+        "body": "No display face and no second text family.",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat-Until-Floating Rule",
+        "body": "In-flow surfaces have a hairline and no shadow; only menus, panels and dialogs that overlay content get a soft offset shadow.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do keep amber for selection, plan, primary action and the device; use blue only for local files.",
+      "Do pair every state colour with an icon and a word.",
+      "Do keep grid cells the same size in every state and put new state treatments on a separate layer.",
+      "Do show one primary button at a time, and keep Run reachable in the pinned bar.",
+      "Do keep copy terse and exact, and name the object and the slot."
+    ],
+    "donts": [
+      "Don't add a second type family, display fonts, gradients, glass or decorative shadows.",
+      "Don't introduce a new accent colour for a feature.",
+      "Don't let the 128-row device list push the workflow down.",
+      "Don't pre-select a device write, offer an occupied slot, or soften the partial-write and unverified-write wording.",
+      "Don't change cell size or add layout shift on state change."
+    ]
+  }
+}
