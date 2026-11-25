@@ -18,7 +18,7 @@ RUN useradd --create-home --uid 1000 app \
  && chown app:app /data/output
 WORKDIR /app
 COPY stprj/ stprj/
-COPY web/__init__.py web/server.py web/plan.py web/
+COPY web/__init__.py web/server.py web/plan.py web/blank.py web/
 COPY web/static/ web/static/
 USER app
 EXPOSE 8765

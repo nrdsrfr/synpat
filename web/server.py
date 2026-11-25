@@ -30,7 +30,9 @@ if str(ROOT) not in sys.path:
 
 from stprj import (FormatError, Payload, Project, StprjFile,  # noqa: E402
                    parse_slot, read_stprj, slot_label, write_raw_stprj, write_stprj)
+from web.blank import DEFAULT_NAME, TEMPLATE_ID, validate_name  # noqa: E402
 from web.plan import PlanError, parse_ops, simulate  # noqa: E402
+from stprj.template import blank_project, template_donor  # noqa: E402
 from stprj.container import MANIFEST_NAME, decode_payload, encode_payload  # noqa: E402
 from stprj.layout import PATTERN_COUNT, STEP_COUNT, TRACK_BASE, TRACK_COUNT, TRACK_SIZE  # noqa: E402
 
@@ -41,6 +43,7 @@ MAX_BACKUP_PAYLOAD = 8 << 20
 DEFAULT_FIRMWARE = "1.42"
 LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 MAX_PLAN_JSON = 512 << 10  # persisted queue (opaque client JSON)
+MAX_TEMPLATES = 4  # blank templates kept (per donor and name)
 MAX_SIMS = 4  # validated simulations kept for planned-slot previews
 MAX_CACHED = 8  # decoded projects (~4 MB each) kept in memory
 
@@ -70,6 +73,7 @@ class Store:
         self.plan_rev = 0  # bumped on every stored plan; stale writes (other tab) are rejected
         self.sims: dict[str, Project] = {}  # validated simulations by key (dest file + ops), for planned-slot previews
         self.rev_counter = 0  # session revisions
+        self.templates: dict[tuple[str, str], tuple[Project, dict]] = {}  # (donor hash, name) -> blank project, info
 
     # ---- file ids: "<dir index>/<file name>" ----
     def resolve(self, file_id: str) -> Path:
@@ -127,6 +131,41 @@ class Store:
         if proj is None:
             raise ApiError(422, f"unsupported project: {err}")
         return proj
+
+    def _donor_candidates(self) -> list[Project]:
+        """One loaded project per supported version; stprj.template picks the best donor among them."""
+        by_version: dict[int, str] = {}
+        for entry in self.list_projects():
+            if entry["supported"]:
+                by_version.setdefault(entry["version"], entry["id"])
+        return [self.project(fid) for fid in by_version.values()]
+
+    def template(self, name: str) -> tuple[Project, dict]:
+        """The virtual destination "template": a blank project named `name`, built by stprj.template from the newest
+        supported local project's version. Returns (project, {name, version, donorVersion}); nothing about the donor
+        except its version is exposed (the library builds the blank from its own embedded image)."""
+        donor = template_donor(self._donor_candidates())
+        if donor is None:
+            raise ApiError(409, "no supported local project is available to build a blank template from")
+        key = (hashlib.sha256(donor.file.payload.header + donor.file.manifest_raw).hexdigest(), name)
+        with self._cache_lock:
+            hit = self.templates.get(key)
+        if hit:
+            return hit
+        try:
+            blank = blank_project(donor, name)
+            blank.validate()
+        except ValueError as e:  # FormatError too. The name was checked beforehand, so this is not a user error.
+            raise ApiError(500, f"could not build the blank template: {e}")
+        if blank.name != name:
+            raise ApiError(500, f"blank template has the name {blank.name!r}, expected {name!r}")
+        result = (blank, {"name": name, "version": blank.version, "donorVersion": donor.version})
+        with self._cache_lock:
+            self.templates.pop(key, None)
+            self.templates[key] = result
+            while len(self.templates) > MAX_TEMPLATES:
+                del self.templates[next(iter(self.templates))]
+        return result
 
     def list_projects(self) -> list[dict]:
         items = self.file_ids()
@@ -197,17 +236,34 @@ def device_backup(store: "Store", body: dict) -> dict:
             "size": target.stat().st_size}
 
 
-def plan_request(store: "Store", body: dict):
-    """Parse {destFileId, ops}; returns (dest Project, ops)."""
-    dest = store.project(str(body.get("destFileId") or ""))
+def template_name(raw) -> str:
     try:
-        return dest, parse_ops(body.get("ops", []))
+        return validate_name(raw)
+    except ValueError as e:
+        raise ApiError(400, str(e))
+
+
+def plan_request(store: "Store", body: dict):
+    """Parse {destFileId, ops[, templateName]}; returns (dest Project, ops, dest key, template info or None).
+    destFileId "template" is the virtual blank-project destination."""
+    file_id = str(body.get("destFileId") or "")
+    template = None
+    if file_id == TEMPLATE_ID:
+        dest, template = store.template(template_name(body.get("templateName")))
+        dest_key = json.dumps([TEMPLATE_ID, template["name"], hashlib.sha256(dest.data).hexdigest()])
+    else:
+        dest = store.project(file_id)
+        dest_key = json.dumps([file_id, store.resolve(file_id).stat().st_mtime_ns])
+    try:
+        return dest, parse_ops(body.get("ops", [])), dest_key, template
     except PlanError as e:
         raise ApiError(400, str(e))
 
 
 def plan_simulate(store: "Store", dest: Project, ops):
     def load(file_id: str) -> Project:
+        if file_id == TEMPLATE_ID:
+            raise PlanError("the blank template cannot be a source")
         try:
             return store.project(file_id)
         except ApiError as e:
@@ -215,10 +271,9 @@ def plan_simulate(store: "Store", dest: Project, ops):
     return simulate(dest, ops, load)
 
 
-def sim_key(store: "Store", file_id: str, ops) -> str:
-    """Identifies one simulation: destination file (+ mtime) and the exact op list."""
-    dest_path = store.resolve(file_id)
-    blob = json.dumps([file_id, dest_path.stat().st_mtime_ns, [list(vars(o).values()) for o in ops]])
+def sim_key(dest_key: str, ops) -> str:
+    """Identifies one simulation: the destination (file + mtime, or template name + content) and the exact op list."""
+    blob = json.dumps([dest_key, [list(vars(o).values()) for o in ops]])
     return hashlib.sha256(blob.encode()).hexdigest()[:20]
 
 
@@ -396,9 +451,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/projects":
             return {"projects": s.list_projects(), "output": str(s.output)}
         if path == "/api/project":
-            return project_json(s.project(q.get("file", "")))
+            proj, template = self.query_project(q)
+            return {**project_json(proj), **({"template": template} if template else {})}
         if path == "/api/preview":
-            return preview_json(s.project(q.get("file", "")), parse_index(q.get("slot", "")))
+            return preview_json(self.query_project(q)[0], parse_index(q.get("slot", "")))
         if path == "/api/plan":
             return {"plan": s.plan, "rev": s.plan_rev}
         if path == "/api/plan/preview":
@@ -413,6 +469,13 @@ class Handler(BaseHTTPRequestHandler):
             return preview_json(self.session()["current"], parse_index(q.get("slot", "")))
         raise ApiError(404, "unknown endpoint")
 
+    def query_project(self, q: dict):
+        """(Project, template info or None) for ?file=<id> (or file=template&name=NAME)."""
+        file_id = q.get("file", "")
+        if file_id == TEMPLATE_ID:
+            return self.store.template(template_name(q.get("name")))
+        return self.store.project(file_id), None
+
     def session(self) -> dict:
         if self.store.session is None:
             raise ApiError(409, "no working session: open a destination project first")
@@ -423,15 +486,16 @@ class Handler(BaseHTTPRequestHandler):
         if sess is None:
             return {"open": False, **extra}
         return {"open": True, "file": sess["file"], "dest": project_json(sess["current"], sess["original"]),
-                "undoDepth": len(sess["stack"]), "applied": sess["applied"], "revision": sess["snap"][2], **extra}
+                "undoDepth": len(sess["stack"]), "applied": sess["applied"], "revision": sess["snap"][2],
+                "template": sess.get("template"), **extra}
 
     def api_post(self, path: str, b: dict):
         s = self.store
         if path == "/api/device/backup":
             return device_backup(s, b)
         if path == "/api/plan/validate":
-            dest, ops = plan_request(s, b)
-            key = sim_key(s, b["destFileId"], ops)
+            dest, ops, dest_key, template = plan_request(s, b)
+            key = sim_key(dest_key, ops)
             result, results = plan_simulate(s, dest, ops)
             with s._cache_lock:
                 s.sims.pop(key, None)
@@ -439,7 +503,7 @@ class Handler(BaseHTTPRequestHandler):
                 while len(s.sims) > MAX_SIMS:
                     del s.sims[next(iter(s.sims))]
             return {"ok": all(r.ok for r in results), "results": results_json(results), "key": key,
-                    "project": project_json(result, dest)}
+                    "project": project_json(result, dest), **({"template": template} if template else {})}
         if path == "/api/plan/store":
             plan = b.get("plan")
             if plan is not None and (not isinstance(plan, dict) or len(json.dumps(plan)) > MAX_PLAN_JSON):
@@ -451,7 +515,7 @@ class Handler(BaseHTTPRequestHandler):
                 s.plan_rev += 1
                 return {"stored": plan is not None, "rev": s.plan_rev}
         if path == "/api/plan/run":
-            dest, ops = plan_request(s, b)
+            dest, ops, _, template = plan_request(s, b)
             if not ops:
                 raise ApiError(409, "the queue is empty")
             result, results = plan_simulate(s, dest, ops)
@@ -459,7 +523,8 @@ class Handler(BaseHTTPRequestHandler):
                 raise ApiError(409, "the queue has errors; fix or force the failing operations", results=results_json(results))
             encoded, rev = make_revision(s, result)
             with s._lock:
-                s.session = {"file": b["destFileId"], "path": s.resolve(b["destFileId"]), "original": dest,
+                s.session = {"file": b["destFileId"], "template": template, "original": dest,
+                             "path": None if template else s.resolve(b["destFileId"]),
                              "current": result, "stack": [(dest, [])], "snap": (result, encoded, rev),
                              "applied": [f"{len(ops)} operation(s) from queue"]}
                 return self.session_state(results=results_json(results),
@@ -480,7 +545,9 @@ class Handler(BaseHTTPRequestHandler):
                     raise ApiError(409, "no changes to save")
                 name = Path(str(b.get("name") or "")).name
                 if not name:
-                    name = f"{sess['path'].stem} edited {time.strftime('%Y%m%d-%H%M%S')}.stprj"
+                    stamp = time.strftime("%Y%m%d-%H%M%S")
+                    name = (f"{sess['path'].stem} edited {stamp}.stprj" if sess["path"]
+                            else f"{sess['template']['name']} new {stamp}.stprj")
                 if not name.lower().endswith(".stprj"):
                     name += ".stprj"
                 target = (s.output / name).resolve()
