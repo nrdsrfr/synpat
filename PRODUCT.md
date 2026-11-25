@@ -3,16 +3,19 @@
 <!-- impeccable:product-schema 1 -->
 
 <!-- Provenance: written from the repository (README.md, code, tests) and the brief of the person who asked for it.
-     No interview round took place, so anything that needed a decision from the owner is under "Open questions". -->
+     No interview round took place. Three answers later came from the owner (audience, the permanence of "never overwrite, never delete", and platform scope); anything still needing a decision from the owner is under "Open questions". -->
 
 ## Platform
 
 web
 
 ## Users
-Owners of an Elektron Syntakt who keep their projects as backups and want to rearrange them: working on a Mac, in Chrome (or Edge), with the Syntakt connected over USB. They are musicians at their instrument, not developers; they know the Syntakt's own vocabulary (pattern banks A to H, slots 1 to 16, kits, trigs, parameter locks, project slots 1 to 128) and expect the tool to use it.
+Owners of an Elektron Syntakt who keep their projects as backups and want to rearrange them: working on a Mac, in Chrome, with the Syntakt connected over USB. They are musicians at their instrument, not developers; they know the Syntakt's own vocabulary (pattern banks A to H, slots 1 to 16, kits, trigs, parameter locks, project slots 1 to 128) and expect the tool to use it.
 
-The tool was built by and for one such owner. Other audiences are not established (see Open questions).
+SynPat is a public project for Syntakt owners in general, not only for the person who built it. These users did not write the code, do not know its internals (`.stprj` files, SysEx, project versions 0x0A/0x0C/0x0D, the working copy and revision model) and cannot ask the author. That implies:
+- README, help text and every in-app message must stand on their own. No assumed context from the author: explain a term the first time it matters, say what will happen to which object, and never rely on "you know what I mean".
+- Internal terms appear only with a plain-language meaning beside them, and error messages say what failed, what state things are in, and what to do next.
+- Safety limits and what has been verified on hardware are stated up front, because a stranger cannot judge the risk from the code.
 
 ## Product Purpose
 SynPat is a local tool for moving musical material between Syntakt projects without Elektron Transfer's whole-project model. It exists to do four things:
@@ -29,13 +32,13 @@ A pattern-level, queue-based manager that talks to the Syntakt directly from the
 ## Operating Context
 - Runs as a small Python server (standard library only) on loopback, with a plain HTML/CSS/JS front end. No build step, no framework, no third-party packages.
 - Backups live in a folder set by `SYNPAT_DATA`, containing `PROJECTS`, `OLD BACKUP` and `OUTPUT`. New files go to `OUTPUT`; existing files are never overwritten.
-- Device features need Chrome or Edge (WebMIDI with SysEx); Elektron Transfer and Overbridge must be closed because they hold the MIDI port.
+- Target platform for now: macOS with Chrome (WebMIDI with SysEx is needed for the device features). Edge also supports WebMIDI and works, but Chrome on a Mac is the target. Other platforms (Windows, Linux, Safari, other browsers) are not in scope at present. Elektron Transfer and Overbridge must be closed because they hold the MIDI port.
 - The server has no authentication and is for loopback only. It keeps one queue and one working copy at a time, in memory, shared by all tabs; the queue survives a page reload, not a server restart.
 - Typical session: choose a source and a destination (each a local `.stprj` or a Syntakt slot), click source patterns onto destination slots, review the planned grid and the per-operation validation, run, then save a new file and/or write to an empty slot.
 - Audition sends a MIDI Program Change; it selects a pattern in the project currently loaded on the device, not in the file shown.
 
 ## Capabilities and Constraints
-- **Never overwrite, never delete.** Device writes go only into empty slots, are re-checked right before writing, need a confirm that names the target, and are verified by read-back (decoded project contents, because the device re-compresses what it stores). Nothing on the device can be deleted. Every file output is a new file; an existing name is refused.
+- **Never overwrite, never delete (permanent).** This is a fixed product constraint, not a current limitation: no feature, now or later, may overwrite or delete anything on the device or on disk. Device writes go only into empty slots, are re-checked right before writing, need a confirm that names the target, and are verified by read-back (decoded project contents, because the device re-compresses what it stores). Nothing on the device can be deleted. Every file output is a new file; an existing name is refused. Future features must be designed to keep this.
 - Reading from the device (slot list, Back up) does not modify it.
 - Supported project versions: 0x0A, 0x0C, 0x0D. Version 0x08 is listed as unsupported and untouched. 0x0A to 0x0C conversion matches what the device produced; 0x0C to 0x0A is inferred and unchecked on a device; lossy conversions are refused unless forced.
 - Only the pattern and the kit it references are copied. A queue has one destination project and at most 128 operations.
@@ -56,21 +59,20 @@ A pattern-level, queue-based manager that talks to the Syntakt directly from the
 - Absent, and not to be invented: other users, testimonials, usage numbers, other firmware or devices tested, any statement from Elektron.
 
 ## Product Principles
-1. **Safety is visible.** Anything that can change the device names its target, can be inspected first, and states its outcome in full, including partial or unverified writes.
-2. **Plan, then commit.** Nothing is written until the queue has been validated and run; the planned result is always shown before it is real.
-3. **Speak the instrument's language.** Use the Syntakt's own names and positions (banks, slots, kits, trigs) and keep local files and device contents visibly distinct.
-4. **Small and boring.** Standard library, plain files, loopback; prefer a visible limitation to a clever workaround.
-5. **Honest about what is verified.** Separate what was tested on hardware from what is inferred, in the product and in its docs.
+1. **Never overwrite, never delete.** Permanent. Anything new must work within it; if a feature seems to need an overwrite or a delete, the feature is changed, not the rule.
+2. **Safety is visible.** Anything that can change the device names its target, can be inspected first, and states its outcome in full, including partial or unverified writes.
+3. **Plan, then commit.** Nothing is written until the queue has been validated and run; the planned result is always shown before it is real.
+4. **Speak the instrument's language, and stand on your own.** Use the Syntakt's own names and positions (banks, slots, kits, trigs), keep local files and device contents visibly distinct, and write every message for someone who has never seen the code.
+5. **Small and boring.** Standard library, plain files, loopback; prefer a visible limitation to a clever workaround.
+6. **Honest about what is verified.** Separate what was tested on hardware from what is inferred, in the product and in its docs.
 
 ## Accessibility & Inclusion
 No product-specific requirement has been stated. The interface keeps visible keyboard focus and named controls, but no formal standard (such as WCAG level) has been chosen.
 
 ## Open questions
-These need an answer from the owner; none is assumed above.
-1. **Audience:** is SynPat for the author only, or for other Syntakt owners (and so for public documentation, support and onboarding)? The repository is public.
-2. **Voice beyond "precise, terse, safety-first":** any wording the owner wants always or never used (for example how to refer to Elektron, or whether first-run help text is wanted).
-3. **Platforms and devices:** will it stay macOS + Chrome, or should Windows/Linux, Edge, or other Elektron devices (for example Digitakt) be supported? Is a native or packaged app in scope?
-4. **Accessibility target:** is a specific standard or any assistive-technology use required?
-5. **Firmware:** which firmware versions beyond OS 1.42 should be treated as in scope, and who verifies them?
-6. **Scope growth:** may later versions copy more than patterns and kits (sounds, samples, songs) or offer any destructive action, or is "never overwrite, never delete" permanent?
-7. **Licensing and release posture:** MIT is in place; is there any stance on distribution, support or Elektron's trademarks beyond the existing disclaimer?
+These still need an answer from the owner; none is assumed above.
+1. **Voice beyond "precise, terse, safety-first":** any wording the owner wants always or never used (for example how to refer to Elektron, or whether first-run help text is wanted).
+2. **Accessibility target:** is a specific standard or any assistive-technology use required?
+3. **Firmware:** which firmware versions beyond OS 1.42 should be treated as in scope, and who verifies them?
+4. **Scope growth:** may later versions copy more than patterns and kits (for example sounds, sample assignments, songs, MIDI track setups)? (Any such feature must keep "never overwrite, never delete".)
+5. **Licensing and release posture:** MIT is in place; is there any stance on distribution, support or Elektron's trademarks beyond the existing disclaimer?
