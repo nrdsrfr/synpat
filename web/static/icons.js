@@ -16,3 +16,6 @@ export const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': 
 
 /** Escape text, then expand {dev} / {dir} tokens into icons (safe: tokens are only expanded after escaping). */
 export const rich = t => esc(t).replace(/\{dev\}/g, deviceIcon).replace(/\{dir\}/g, folderIcon);
+
+/** Small decorative UI glyph from the sprite (check, x, warn, up, down); always paired with text or an aria-label. */
+export const ui = name => `<svg class="ico" aria-hidden="true"><use href="#i-${name}"/></svg>`;

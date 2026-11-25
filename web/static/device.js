@@ -1,17 +1,22 @@
 // Device panel: connect over WebMIDI SysEx, list project slots, read ("Back up") and write to EMPTY slots.
 // The only device writes go through rpc.writeProject (empty slots only, verified by read-back).
 import { esc, rich, folderIcon, deviceIcon } from './icons.js';
-import { $, state, hooks, log, api, pad3, fmtBytes, outName, verText } from './common.js';
+import { $, state, hooks, log, api, pad3, fmtBytes, outName, verText, TEMPLATE_NOTE } from './common.js';
 
 export const dev = { rpc: null, mod: null, name: 'Device', firmware: '', busy: false };
 let midi = null, fillPorts = () => {};
 
-export function setDev(text, bad = false) { const el = $('dev-status'); el.innerHTML = rich(text); el.style.color = bad ? 'var(--bad)' : ''; }
+export function setDev(text, bad = false) { const el = $('dev-status'); el.innerHTML = rich(text); el.title = el.textContent; el.classList.toggle('bad', bad); }
 export function setBusy(b) {
   dev.busy = b;
-  $('dev-connect').disabled = b; $('dev-refresh').disabled = b || !dev.rpc;
+  $('dev-connect').disabled = b; $('dev-refresh').disabled = b || !dev.rpc; $('dev-refresh').hidden = !dev.rpc;
   document.querySelectorAll('#dev-table button.backup, #dev-table button.load, #src-dev-read, #dst-dev-read').forEach(x => { x.disabled = b; });
   hooks.onBusy?.(b);
+}
+/** The slot list lives in a drawer under the header: closed by default so it does not push the workflow down. */
+let drawerOpened = false;  // the drawer opens by itself once, after the first successful listing
+function setDrawer(open) {
+  $('device-panel').hidden = !open; $('dev-toggle').setAttribute('aria-expanded', String(open));
 }
 // Device reports onProgress(done, null) per chunk (total unknown) and onProgress(n, n) at the end,
 // so show bytes read with an indeterminate <progress> until the final call.
@@ -119,24 +124,30 @@ function localMatches(slot, name) {
   }
   return { exact, nameOnly };
 }
-const matchLinks = (m, tag) => `<a data-id="${esc(m.id)}" data-role="src">src</a><a data-id="${esc(m.id)}" data-role="dst">dst</a>${folderIcon}<b>${esc(m.dir)}</b> / ${esc(m.file)}${tag}`;
+const matchRow = (m, tag) => `<div class="match"><button class="use" data-id="${esc(m.id)}" data-role="src" title="Use this local backup as the SOURCE project">Source</button><button class="use" data-id="${esc(m.id)}" data-role="dst" title="Use this local backup as the DESTINATION project">Destination</button>${folderIcon}<span class="where-file" title="${esc(m.dir)} / ${esc(m.file)}"><b>${esc(m.dir)}</b> / ${esc(m.file)}</span>${tag}</div>`;
 export function renderTable() {
   const tb = $('dev-table').querySelector('tbody'); tb.innerHTML = '';
+  $('dev-toggle').hidden = !state.devList;
+  const show = $('dev-filter').value;
+  let shown = 0;
   for (const p of state.devList || []) {
+    if ((show === 'used' && p.empty) || (show === 'empty' && !p.empty)) continue;
+    shown++;
     const tr = document.createElement('tr'); if (p.empty) tr.className = 'empty';
     let links = '';
     if (!p.empty) {
       const { exact, nameOnly } = localMatches(p.slot, p.name);
-      links = exact.length ? exact.map(m => matchLinks(m, '')).join('<br>')
-        : nameOnly.map(m => matchLinks(m, ' <span class="ver">(name only)</span>')).join('<br>');
+      links = exact.length ? exact.map(m => matchRow(m, '')).join('')
+        : nameOnly.map(m => matchRow(m, ' <span class="ver">(name only)</span>')).join('');
     }
     const dis = dev.busy ? ' disabled' : '';
     const action = p.empty
       ? `<button class="load" data-slot="${p.slot}" title="Write a local project into empty device slot ${pad3(p.slot)}"${dis}>Load… ${folderIcon}<span class="arrow">→</span>${deviceIcon}</button>`
       : `<button class="backup" data-slot="${p.slot}" data-name="${esc(p.name)}" title="Back up device slot ${pad3(p.slot)} → ${esc(outName())} (reads only; the device is not modified)"${dis}>Back up ${deviceIcon}<span class="arrow">→</span>${folderIcon}</button>`;
-    tr.innerHTML = `<td class="slot">${deviceIcon}${p.slot}</td><td>${esc(p.name)}</td><td>${p.empty ? 'empty' : 'occupied'}</td><td>${action}</td><td>${links}</td>`;
+    tr.innerHTML = `<td class="slot">${pad3(p.slot)}</td><td class="nm">${p.empty ? 'empty' : esc(p.name)}</td><td>${action}</td><td><div class="matches">${links}</div></td>`;
     tb.appendChild(tr);
   }
+  if (state.devList && !shown) tb.innerHTML = '<tr><td colspan="4" class="note-cell">No slots match this filter.</td></tr>';
 }
 
 export async function refresh() {
@@ -156,6 +167,8 @@ export async function refresh() {
     $('dev-info').innerHTML = `${esc(dev.name)} · software <b>${esc(v.version || '?')}</b>${v.build ? ' (build ' + esc(v.build) + ')' : ''} · UID <b>${esc(uidTxt)}</b> · storage <b>${esc(storTxt)}</b>`;
     state.devList = await dev.rpc.listProjects();
     renderTable(); hooks.onDeviceList?.();
+    $('dev-connect').textContent = 'Reconnect'; $('dev-connect').classList.remove('primary-ghost');
+    if (!drawerOpened) { drawerOpened = true; setDrawer(true); }
     setDev(`connected · ${state.devList.filter(p => !p.empty).length} of ${state.devList.length} slots used`);
     log(`read ${state.devList.length} project slots`, 'ok', 'dev');
   } catch (e) {
@@ -169,12 +182,12 @@ async function connect() {
   if (!midi.supported) { setDev('Web MIDI unavailable in this browser (use Chrome or Edge)', true); return; }
   if (!await midi.requestSysexAccess()) { setDev('SysEx permission denied or MIDI unavailable', true); log('SysEx access not granted', 'err', 'dev'); return; }
   fillPorts();
-  if (!midi.out || !midi.inp) { setDev('select the Syntakt MIDI In and Out above (none auto-detected)', true); return; }
+  if (!midi.out || !midi.inp) { setDev('select the Syntakt MIDI In and Out in the MIDI menu (none auto-detected)', true); $('midi-menu').open = true; return; }
   try {
     dev.rpc?.stop();
     dev.rpc = new dev.mod.ElektronRpc({ input: midi.inp, output: midi.out, timeoutMs: 3000,
       log: m => dev.busy || log('rpc: ' + (m.length > 110 ? m.slice(0, 110) + ` … (${m.length} chars)` : m), '', 'dev') });
-    dev.rpc.start();
+    dev.rpc.start(); $('dev-refresh').hidden = false;
   } catch (e) { setDev('error: ' + e.message, true); log(e.message, 'err', 'dev'); return; }
   setDev('connecting…');
   try { dev.name = (await dev.rpc.ping()).name || 'Device'; } catch (e) {
@@ -189,7 +202,9 @@ function pickLoadSource(slot) {
   return new Promise(resolve => {
     const dlg = $('load-dialog'), list = $('load-list');
     const items = [];
-    const sess = hooks.getSession?.();
+    // A blank-template working copy belongs to one slot: offer it only there.
+    const tpl = hooks.templateSession?.();
+    const sess = tpl && tpl.slot !== slot ? null : hooks.getSession?.();
     if (sess) items.push({ value: 'session', html: `${folderIcon}<span>working copy <span class="unsaved">● result of the last run</span> — ${esc(sess.dest.name)}, ${verText(sess.dest.version)}</span>` });
     for (const p of state.projects || []) if (p.supported) {
       items.push({ value: 'file:' + p.id, html: `${folderIcon}<span><b>${esc(p.dir)}</b> / ${esc(p.file)} — ${esc(p.name)} (${verText(p.version)})</span>` });
@@ -230,7 +245,8 @@ async function loadToSlot(slot) {
   let src;
   try { src = await fetchPayload(choice, choice === 'session' ? hooks.getSession?.()?.revision?.id : undefined); } catch (e) { setDev(`load to slot ${pad3(slot)} failed: ${e.message}`, true); log(`Load to slot ${pad3(slot)} failed: ${e.message}`, 'err', 'dev'); return; }
   const ver = '0x' + src.version.toString(16).toUpperCase().padStart(2, '0');
-  if (!confirm(`Write ${src.name} (${src.file}${src.rev ? ', rev ' + src.rev : ''}, v${ver}) to device slot ${pad3(slot)}?\n\nSlot ${pad3(slot)} is empty. The device keeps its other projects.`)) { setDev('load cancelled'); return; }
+  const tplNote = choice === 'session' && hooks.templateSession?.() ? `\n\n${TEMPLATE_NOTE}` : '';
+  if (!confirm(`Write ${src.name} (${src.file}${src.rev ? ', rev ' + src.rev : ''}, v${ver}) to device slot ${pad3(slot)}?\n\nSlot ${pad3(slot)} is empty. The device keeps its other projects.${tplNote}`)) { setDev('load cancelled'); return; }
   await writeSlot(slot, src.bytes, `${src.name} (${src.file})`);
 }
 
@@ -238,12 +254,22 @@ export function initDevice({ midi: m, fillPorts: fp }) {
   midi = m; fillPorts = fp;
   $('dev-connect').onclick = connect;
   $('dev-refresh').onclick = refresh;
+  $('dev-toggle').onclick = () => setDrawer($('device-panel').hidden);
+  $('dev-filter').onchange = renderTable;
   $('dev-table').addEventListener('click', e => {
     const b = e.target.closest('button.backup');
     if (b) return backupButton(+b.dataset.slot, b.dataset.name);
     const ld = e.target.closest('button.load');
     if (ld) return loadToSlot(+ld.dataset.slot);
-    const a = e.target.closest('a[data-id]'); if (!a) return;
+    const a = e.target.closest('button.use[data-id]'); if (!a) return;
+    setDrawer(false);  // the chosen project is shown in its pane: get the panel out of the way
     hooks.useLocal(a.dataset.role, a.dataset.id);
+  });
+  document.addEventListener('click', e => {
+    const inside = e.composedPath().some(n => n.id === 'device-panel' || n.id === 'dev-toggle');  // path, not closest(): rows re-render
+    if (!$('device-panel').hidden && !inside) setDrawer(false);
+  });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !$('device-panel').hidden && !document.querySelector('dialog[open]')) { setDrawer(false); $('dev-toggle').focus(); }
   });
 }

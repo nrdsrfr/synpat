@@ -15,11 +15,21 @@ export const hooks = {};
 
 // kind: 'dev' (operation on the Syntakt) or 'local' (file on this computer) prefixes the matching icon;
 // {dev}/{dir} tokens inside msg are expanded to icons too.
+const logCounts = { err: 0, warn: 0 };
 export function log(msg, cls = '', kind = '') {
   const d = document.createElement('div'); if (cls) d.className = cls;
   const pre = kind === 'dev' ? deviceIcon : kind === 'local' ? folderIcon : '';
   d.innerHTML = `<span class="ts">${new Date().toLocaleTimeString()}</span> ${pre}${rich(msg)}`;
   $('log').prepend(d);
+  // The log is collapsed: its summary carries the latest message and error/warning counts, and an error opens it.
+  if (logCounts[cls] !== undefined) logCounts[cls]++;
+  const n = (c, w) => c ? `${c} ${w}${c === 1 ? '' : 's'}` : '';
+  $('log-count').textContent = [n(logCounts.err, 'error'), n(logCounts.warn, 'warning')].filter(Boolean).join(', ');
+  if (!msg.startsWith('rpc:')) {
+    const last = $('log-last'); last.className = 'log-last' + (cls === 'err' || cls === 'warn' ? ' ' + cls : '');
+    last.innerHTML = `${pre}${rich(msg)}`;
+  }
+  if (cls === 'err') $('log-box').open = true;
 }
 export async function api(path, body) {
   const r = await fetch('/api/' + path, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -37,3 +47,6 @@ export function deviceOrigin(fileId) {
   const m = BACKUP_NAME.exec(fileOf(fileId));
   return m ? { slot: +m[1], name: m[2], date: m[3], time: `${m[4]}:${m[5]}` } : null;
 }
+
+/** Added to every confirm that writes a blank-template project to the device. */
+export const TEMPLATE_NOTE = "This is a new project built from SynPat's blank template (derived by SynPat, first tested on hardware in slot 125). It is not a copy of an existing project.";
